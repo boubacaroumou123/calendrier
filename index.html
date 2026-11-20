@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Calendriers, Horloge et Alarme</title>
+<link rel="manifest" href="manifest.json">
+<script>
+/* securite.js : verrou par code PIN et empreinte pour tes applis.
+   Ajoute dans le <head> de chaque appli : <script src="securite.js"><\/script>
+   Options : data-required="true" (code obligatoire), data-button="false" (cache le bouton 🔒). */
+(function(){
+'use strict';
+var K='sec_v1',UNL='sec_unlock',me=document.currentScript,
+    REQ=!!(me&&me.dataset.required==='true'),BTN=!(me&&me.dataset.button==='false'),
+    root=document.documentElement,st=null,locked=false,mode='enter',buf='',tmp='',after=null,msg='',recShown='',busy=false,bioOK=false,lastT=0;
+try{st=JSON.parse(localStorage.getItem(K))}catch(e){}
+var OK=!!(window.crypto&&window.crypto.subtle),enc=new TextEncoder();
+
+function css(t){var s=document.createElement('style');s.textContent=t;root.appendChild(s)}
+css('#sec-ov{position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483646;display:none;align-items:center;justify-content:center;background:linear-gradient(160deg,#0b7a4b,#0a3d2b);color:#fff;font-family:system-ui,-apple-system,sans-serif;text-align:center;padding:env(safe-area-inset-top,0px) 16px env(safe-area-inset-bottom,0px);overflow:auto}'
++'html.sec-lock{overflow:hidden}html.sec-lock body{visibility:hidden}'
++'#sec-ov h1{font-size:1.5rem;margin:4px 0}#sec-ov p{margin:0 0 14px;color:#cfeee0}.si{font-size:2.6rem}'
++'#sd{display:flex;justify-content:center;gap:12px;margin:10px 0;min-height:18px}#sd i{width:14px;height:14px;border:2px solid #fff;border-radius:50%}#sd i.f{background:#fff}'
++'#sm{min-height:22px;color:#f0d77a;font-weight:600;margin-bottom:8px}'
++'#sk{display:grid;grid-template-columns:repeat(3,72px);gap:14px;justify-content:center;margin:6px auto 14px}'
++'#sk button{width:72px;height:72px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;font-size:1.6rem;cursor:pointer}#sk button:active{background:rgba(255,255,255,.3)}#sk button:empty{visibility:hidden}'
++'#sec-ov a{color:#f0d77a;text-decoration:underline;cursor:pointer;display:block;margin:10px}'
++'#sec-ov .b{background:#f0d77a;color:#0a3d2b;border:0;border-radius:12px;padding:12px 18px;font-size:1rem;font-weight:700;margin:6px;cursor:pointer}'
++'#sec-ov input{font-size:1.4rem;text-align:center;letter-spacing:3px;padding:10px;border-radius:10px;border:0;width:220px;text-transform:uppercase}'
++'.rc{font-size:2rem;font-weight:700;letter-spacing:4px;background:rgba(255,255,255,.15);border-radius:12px;padding:12px;margin:10px 0}'
++'#sec-fb{position:fixed;left:10px;bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:2147483000;width:38px;height:38px;border-radius:50%;border:0;background:#0b7a4b;color:#fff;opacity:.55;font-size:1rem}'
++'#sec-pn{position:fixed;left:10px;bottom:calc(56px + env(safe-area-inset-bottom,0px));z-index:2147483001;width:250px;background:#fff;color:#14202b;border-radius:14px;padding:12px;box-shadow:0 6px 24px rgba(0,0,0,.3);font-family:system-ui,sans-serif;display:none}'
++'#sec-pn button,#sec-pn select{display:block;width:100%;margin-top:8px;padding:9px;border-radius:10px;border:1px solid #dde3e8;background:#f4f6f8;color:#14202b;font-size:.95rem}#sec-pn label{display:block;margin-top:8px;font-size:.85rem}');
+
+function b64(u){var s='';for(var i=0;i<u.length;i++)s+=String.fromCharCode(u[i]);return btoa(s)}
+function ub(s){var r=atob(s),u=new Uint8Array(r.length);for(var i=0;i<r.length;i++)u[i]=r.charCodeAt(i);return u}
+function rnd(n){return crypto.getRandomValues(new Uint8Array(n))}
+function same(a,b){if(a.length!==b.length)return false;var d=0;for(var i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0}
+function save(){try{if(st)localStorage.setItem(K,JSON.stringify(st));else localStorage.removeItem(K)}catch(e){}}
+function until(){return +localStorage.getItem(UNL)||0}
+function setUntil(v){try{localStorage.setItem(UNL,String(v))}catch(e){}}
+function dly(){return st&&st.delay!=null?st.delay:5}
+async function hash(v,salt){
+  var k=await crypto.subtle.importKey('raw',enc.encode(v),'PBKDF2',false,['deriveBits']);
+  var b=await crypto.subtle.deriveBits({name:'PBKDF2',salt:ub(salt),iterations:150000,hash:'SHA-256'},k,256);
+  return b64(new Uint8Array(b));
+}
+function gen(){var a='ABCDEFGHJKMNPQRSTUVWXYZ23456789',r=rnd(8),s='';for(var i=0;i<8;i++)s+=a[r[i]%a.length];return s}
+
+if(window.PublicKeyCredential&&PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable){
+  PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().then(function(v){bioOK=v}).catch(function(){});
+}
+async function bioEnable(){
+  try{
+    var c=await navigator.credentials.create({publicKey:{challenge:rnd(32),rp:{name:'Mes applis',id:location.hostname},user:{id:rnd(16),name:'proprietaire',displayName:'Propriétaire'},pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}],authenticatorSelection:{authenticatorAttachment:'platform',userVerification:'required'},timeout:60000}});
+    st.cred=b64(new Uint8Array(c.rawId));save();return true;
+  }catch(e){return false}
+}
+async function bioUnlock(silent){
+  try{
+    await navigator.credentials.get({publicKey:{challenge:rnd(32),allowCredentials:[{type:'public-key',id:ub(st.cred)}],userVerification:'required',rpId:location.hostname,timeout:60000}});
+    st.fails=0;save();unlock();
+  }catch(e){if(!silent){msg='Empreinte non reconnue : utilise ton code.';render()}}
+}
+
+/* Écran de verrouillage */
+var ov=document.createElement('div');ov.id='sec-ov';
+ov.innerHTML='<div><div class="si">🔒</div><h1 id="sh"></h1><p id="sp"></p><div id="sd"></div><div id="sm"></div><div id="sk"></div><div id="sx"></div></div>';
+root.appendChild(ov);
+function q(id){return ov.querySelector('#'+id)}
+function showOv(){ov.style.display='flex'}
+function hideOv(){ov.style.display='none'}
+function render(){
+  var T={enter:['Déverrouiller','Entre ton code'],chk:['Confirme ton code','Pour continuer'],new1:['Crée ton code','4 à 8 chiffres, puis ✔'],new2:['Confirme ton code','Entre-le encore une fois, puis ✔'],rec:['Code de secours','Note-le sur papier : il ne sera plus affiché'],bioask:['Empreinte','Déverrouiller avec ton empreinte ?'],recin:['Code de secours','Entre ton code de secours']};
+  q('sh').textContent=T[mode][0];q('sp').textContent=T[mode][1];q('sm').textContent=msg;
+  var num=mode==='enter'||mode==='chk'||mode==='new1'||mode==='new2';
+  var n=(mode==='enter'||mode==='chk')&&st?st.len:Math.max(4,buf.length),d='';
+  for(var i=0;i<n;i++)d+='<i'+(i<buf.length?' class="f"':'')+'></i>';
+  q('sd').innerHTML=num?d:'';
+  var left=(mode==='new1'||mode==='new2')?'✔':(mode==='enter'&&st&&st.cred?'🫆':'');
+  var ks=['1','2','3','4','5','6','7','8','9',left,'0','⌫'];
+  q('sk').innerHTML=num?ks.map(function(k){return '<button data-k="'+k+'">'+k+'</button>'}).join(''):'';
+  var x='';
+  if(mode==='enter')x='<a data-a="forgot">Code oublié ?</a>';
+  if(mode==='chk')x='<a data-a="cancel">Annuler</a>';
+  if(mode==='new1'||mode==='new2')x=(st&&!locked)?'<a data-a="cancel">Annuler</a>':(!REQ&&!st?'<a data-a="later">Plus tard</a>':'');
+  if(mode==='rec')x='<div class="rc">'+recShown.slice(0,4)+'-'+recShown.slice(4)+'</div><button class="b" data-a="recok">J’ai noté le code</button>';
+  if(mode==='bioask')x='<button class="b" data-a="bioyes">Activer l’empreinte</button><a data-a="done">Plus tard</a>';
+  if(mode==='recin')x='<input id="sri" placeholder="XXXX-XXXX" autocomplete="off"><br><button class="b" data-a="recgo">Valider</button><a data-a="back">Retour</a>';
+  q('sx').innerHTML=x;
+}
+function lock(){
+  if(!st||!OK)return;
+  locked=true;mode='enter';buf='';msg='';root.classList.add('sec-lock');showOv();render();setUntil(0);
+}
+function unlock(){
+  locked=false;mode='enter';buf='';msg='';root.classList.remove('sec-lock');hideOv();
+  setUntil(dly()>0?Date.now()+dly()*60000:0);
+}
+function done(){mode='enter';if(locked)unlock();else hideOv()}
+function verifyThen(fn){after=fn;mode='chk';buf='';msg='';showOv();render()}
+function startNew(){mode='new1';buf='';tmp='';msg='';showOv();render()}
+
+async function finishNew(pin){
+  var salt=b64(rnd(16)),rs=b64(rnd(16)),code=gen();
+  st={salt:salt,hash:await hash(pin,salt),len:pin.length,rsalt:rs,rec:await hash(code,rs),cred:st&&st.cred?st.cred:null,delay:st&&st.delay!=null?st.delay:5,fails:0,until:0};
+  save();buf='';tmp='';recShown=code;mode='rec';msg='';
+}
+async function check(){
+  var left=st.until-Date.now();
+  if(left>0){msg='Réessaie dans '+Math.ceil(left/1000)+' s.';buf='';return}
+  var h=await hash(buf,st.salt);
+  if(same(h,st.hash)){
+    st.fails=0;st.until=0;save();buf='';msg='';
+    if(mode==='chk'){var a=after;after=null;mode='enter';if(!locked)hideOv();if(a)a()}else unlock();
+  }else{
+    st.fails++;if(st.fails>=3)st.until=Date.now()+Math.min(3600,30*Math.pow(2,st.fails-3))*1000;
+    save();buf='';msg=st.until>Date.now()?'Trop d’essais. Attends '+Math.ceil((st.until-Date.now())/1000)+' s.':'Code incorrect.';
+    if(navigator.vibrate)navigator.vibrate(200);
+  }
+}
+async function submit(){
+  if(busy)return;busy=true;
+  try{
+    if(mode==='new1'){if(buf.length<4)msg='Au moins 4 chiffres.';else{tmp=buf;buf='';mode='new2';msg=''}}
+    else if(mode==='new2'){if(buf!==tmp){msg='Les codes ne correspondent pas.';buf='';tmp='';mode='new1'}else await finishNew(buf)}
+    else if(mode==='enter'||mode==='chk'){await check()}
+  }catch(e){msg='Erreur : '+e.message}
+  busy=false;render();
+}
+function press(k){
+  if(busy)return;
+  if(k==='⌫')buf=buf.slice(0,-1);
+  else if(k==='✔'){submit();return}
+  else if(k==='🫆'){bioUnlock(false);return}
+  else if(k!==''&&buf.length<8)buf+=k;
+  render();
+  if((mode==='enter'||mode==='chk')&&st&&buf.length===st.len)submit();
+}
+ov.addEventListener('click',async function(e){
+  var t=e.target.closest('[data-k],[data-a]');if(!t)return;
+  if(t.dataset.k!==undefined){press(t.dataset.k);return}
+  var a=t.dataset.a;
+  if(a==='forgot'){mode='recin';msg=''}
+  else if(a==='back'){mode='enter';msg=''}
+  else if(a==='cancel'){mode='enter';buf='';msg='';if(locked)render();else hideOv()}
+  else if(a==='later'){try{sessionStorage.setItem('sec_later','1')}catch(x){}hideOv()}
+  else if(a==='recok'){if(bioOK&&!st.cred)mode='bioask';else{done();return}}
+  else if(a==='done'){done();return}
+  else if(a==='bioyes'){var ok=await bioEnable();msg=ok?'Empreinte activée.':'Impossible d’activer l’empreinte.';done();return}
+  else if(a==='recgo'){
+    var c=(q('sri').value||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+    try{
+      if(c.length===8&&same(await hash(c,st.rsalt),st.rec)){mode='new1';buf='';tmp='';msg='Code de secours accepté.'}
+      else msg='Code de secours incorrect.';
+    }catch(x){msg='Erreur : '+x.message}
+  }
+  render();
+});
+
+/* Bouton 🔒 et panneau */
+function panel(){return document.getElementById('sec-pn')}
+function openPanel(){
+  var p=panel();
+  if(p.style.display==='block'){p.style.display='none';return}
+  var o=[[0,'À chaque sortie'],[1,'1 minute'],[5,'5 minutes'],[15,'15 minutes'],[30,'30 minutes'],[60,'1 heure']];
+  var h='<b>🔒 Sécurité</b>';
+  if(!OK)h+='<p style="font-size:.85rem">Sécurité indisponible : ouvre cette page avec une adresse en https://.</p>';
+  else if(!st)h+='<button data-p="new">Créer un code</button>';
+  else{
+    h+='<button data-p="lock">Verrouiller maintenant</button><label>Verrouillage automatique<select data-p="delay">'+o.map(function(x){return '<option value="'+x[0]+'"'+(x[0]===dly()?' selected':'')+'>'+x[1]+'</option>'}).join('')+'</select></label>';
+    if(bioOK||st.cred)h+='<button data-p="bio">'+(st.cred?'Désactiver':'Activer')+' l’empreinte</button>';
+    h+='<button data-p="chg">Changer le code</button><button data-p="off">Désactiver la protection</button>';
+  }
+  p.innerHTML=h+'<button data-p="x">Fermer</button>';p.style.display='block';
+}
+function setup(){
+  if(BTN){
+    var b=document.createElement('button');b.id='sec-fb';b.textContent='🔒';b.setAttribute('aria-label','Sécurité');b.onclick=openPanel;root.appendChild(b);
+  }
+  var p=document.createElement('div');p.id='sec-pn';root.appendChild(p);
+  p.addEventListener('click',function(e){
+    var a=e.target.dataset.p;if(!a||a==='delay')return;
+    p.style.display='none';
+    if(a==='new')startNew();
+    else if(a==='lock')lock();
+    else if(a==='chg')verifyThen(startNew);
+    else if(a==='off')verifyThen(function(){st=null;save();setUntil(0);locked=false;root.classList.remove('sec-lock');hideOv()});
+    else if(a==='bio'){
+      if(st.cred){st.cred=null;save()}else{bioEnable()}
+    }
+  });
+  p.addEventListener('change',function(e){
+    if(e.target.dataset.p==='delay'&&st){st.delay=+e.target.value;save();setUntil(st.delay>0?Date.now()+st.delay*60000:0)}
+  });
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',setup);else setup();
+
+/* Verrouillage automatique et partage entre applis du même site */
+function touch(){
+  var n=Date.now();
+  if(!locked&&st&&dly()>0&&n-lastT>5000){lastT=n;setUntil(n+dly()*60000)}
+}
+['pointerdown','keydown','touchstart'].forEach(function(ev){addEventListener(ev,touch,{passive:true,capture:true})});
+function expiry(){if(st&&!locked&&dly()>0&&until()<Date.now())lock()}
+document.addEventListener('visibilitychange',function(){
+  if(document.hidden){if(st&&dly()===0&&!locked)lock()}else expiry();
+});
+addEventListener('storage',function(e){
+  if(e.key===K){try{st=JSON.parse(e.newValue)}catch(x){st=null}if(!st&&locked){locked=false;root.classList.remove('sec-lock');hideOv()}}
+  if(e.key===UNL&&st&&dly()>0){
+    if(+e.newValue>Date.now()){if(locked&&mode==='enter'&&!busy){locked=false;root.classList.remove('sec-lock');hideOv();buf='';msg=''}}
+    else if(!locked)lock();
+  }
+});
+setInterval(function(){
+  expiry();
+  if(locked&&st&&st.until>Date.now()&&(mode==='enter')){msg='Attends '+Math.ceil((st.until-Date.now())/1000)+' s.';render()}
+},1000);
+
+/* Démarrage */
+if(OK){
+  if(!st){
+    var skip=false;try{skip=sessionStorage.getItem('sec_later')==='1'}catch(e){}
+    if(REQ){locked=true;root.classList.add('sec-lock')}
+    if(REQ||!skip){mode='new1';showOv();render()}
+  }else if(dly()>0&&until()>Date.now()){
+    locked=false;setUntil(Date.now()+dly()*60000);
+  }else{
+    lock();
+    if(st.cred)setTimeout(function(){bioUnlock(true)},400);
+  }
+}
+window.Securite={lock:lock,open:function(){var p=panel();if(p)openPanel()}};
+})();
+
+</script>
+<meta name="theme-color" content="#0b7a4b">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root{--bg:#f4f6f8;--card:#fff;--tx:#14202b;--mu:#5d6b78;--ac:#0b7a4b;--ac2:#e8f5ee;--bd:#dde3e8;--red:#c0392b;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1519;--card:#18212a;--tx:#e8eef3;--mu:#93a1ae;--ac:#3ecf8e;--ac2:#14302a;--bd:#2a3743;--red:#ff7b6b;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0f1519;--card:#18212a;--tx:#e8eef3;--mu:#93a1ae;--ac:#3ecf8e;--ac2:#14302a;--bd:#2a3743;--red:#ff7b6b;color-scheme:dark}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:12px;max-width:640px;margin-inline:auto}
+h2{font-size:1rem;margin:0 0 10px;color:var(--ac)}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px;margin-bottom:12px}
+#clock{font-size:3.2rem;font-weight:700;text-align:center;font-variant-numeric:tabular-nums;letter-spacing:1px}
+#clock small{font-size:1.3rem;color:var(--mu)}
+#dt{text-align:center;color:var(--mu);text-transform:capitalize}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input,button{font:inherit;border-radius:10px;border:1px solid var(--bd);padding:9px 10px;background:var(--bg);color:var(--tx)}
+button{background:var(--ac);color:#fff;border:0;font-weight:600;cursor:pointer}
+button.g{background:var(--ac2);color:var(--ac)}
+button.r{background:transparent;color:var(--red);padding:6px 10px}
+input[type=text]{flex:1;min-width:120px}
+.al{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--bd)}
+.al b{font-size:1.4rem;font-variant-numeric:tabular-nums}
+.al span{color:var(--mu);font-size:.85rem;display:block}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;text-align:center}
+.cal div{padding:8px 0;border-radius:8px;font-size:.9rem}
+.cal .h{color:var(--mu);font-size:.75rem;padding:2px 0}
+.cal .t{background:var(--ac);color:#fff;font-weight:700}
+.nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.grid{display:grid;gap:8px}
+.cc{display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-top:1px solid var(--bd)}
+.cc:first-child{border-top:0}
+.cc em{font-style:normal;color:var(--mu);font-size:.8rem;display:block}
+.cc div:last-child{text-align:right;font-weight:600;text-transform:capitalize}
+.ev{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-top:1px solid var(--bd);font-size:.92rem}
+.ev span{color:var(--mu);white-space:nowrap}
+.note{color:var(--mu);font-size:.8rem;margin-top:8px}
+#ring{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:#fff;z-index:9;text-align:center;padding:20px}
+#ring.on{display:flex}
+#ring h1{font-size:3rem;margin:0}
+.bar{height:14px;border-radius:7px;background:var(--bd);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--ac);width:0}
+:root{--gold:#d4a017}
+body{background:radial-gradient(circle at 50% -10%,var(--ac2),var(--bg) 55%)}
+.card{box-shadow:0 2px 10px rgba(0,0,0,.06);border-radius:18px}
+.hero{background:linear-gradient(135deg,#0b7a4b,#0d4f36);color:#fff;border:0}
+.hero #dt{color:#d9efe4}
+.hero #clock small{color:#f0d77a}
+.ttl{text-align:center;font-size:.8rem;letter-spacing:2px;text-transform:uppercase;color:#f0d77a;margin-bottom:6px}
+h2{border-bottom:2px solid var(--gold);display:inline-block;padding-bottom:3px;margin-bottom:12px}
+select{font:inherit;border-radius:10px;border:1px solid var(--bd);padding:9px 10px;background:var(--bg);color:var(--tx)}
+.cal .p{box-shadow:inset 0 -3px 0 var(--gold)}
+</style>
+</head>
+<body>
+
+<div class="card hero">
+  <div class="ttl">Calendriers · Horloge · Rappels</div>
+  <div id="clock">--:--<small>:--</small></div>
+  <div id="dt"></div>
+  <div id="hj" style="text-align:center;color:#f0d77a;font-weight:600;margin-top:2px"></div>
+  <button id="inst" class="g" style="display:none;margin:10px auto 0">📲 Installer l’appli</button>
+</div>
+
+<div class="card">
+  <h2>⏰ Alarmes et rappels</h2>
+  <div class="row">
+    <input type="time" id="at" value="07:00">
+    <input type="text" id="al" placeholder="Rappel (ex. prière, cours)">
+    <button id="add">Ajouter</button>
+  </div>
+  <div id="list"></div>
+  <div class="note">L’alarme sonne seulement si cette page reste ouverte (écran allumé). Pour une alarme garantie, demande-moi aussi de la créer dans l’horloge du téléphone.</div>
+</div>
+
+<div class="card">
+  <h2>🔔 Sonneries</h2>
+  <div class="row"><span style="width:70px">Alarmes</span><select id="tn" style="flex:1"></select></div>
+  <div class="row" style="margin-top:8px"><span style="width:70px">Prières</span><select id="tp" style="flex:1"></select></div>
+  <div class="row" style="margin-top:8px"><input type="file" id="tf" accept="audio/*" style="flex:1"></div>
+  <div class="note" id="tmsg">Choisis une sonnerie pour l’écouter. Tu peux aussi ajouter ton propre fichier audio (mp3, max 1,5 Mo), par exemple un vrai appel à la prière, puis le choisir dans la liste « Ma sonnerie ».</div>
+</div>
+
+<div class="card">
+  <h2>🕌 Heures de prière</h2>
+  <div class="row"><select id="city"></select><b id="nextp" style="color:var(--ac)"></b></div>
+  <div id="prayers"></div>
+  <div class="note">Calcul astronomique (méthode Ligue islamique mondiale), à titre indicatif : vérifie avec ta mosquée. Touche la cloche 🔔 d’une prière pour qu’elle sonne à l’heure (page ouverte, écran allumé).</div>
+</div>
+
+<div class="card">
+  <h2>📜 Hadith du jour</h2>
+  <div id="hd" style="line-height:1.55"></div>
+  <div id="hs" class="note"></div>
+  <div class="row" style="margin-top:8px"><button class="g" id="hp">◀</button><button class="g" id="hn">▶</button><button class="g" id="hr">🎲 Autre</button><button class="g" id="hw">Partager</button></div>
+  <div class="note">Reformulations en français de hadiths authentiques. Vérifie toujours auprès d’un savant ou d’un recueil fiable avant de les citer.</div>
+</div>
+
+<div class="card">
+  <h2>📖 Coran en français</h2>
+  <div id="qv" style="line-height:1.55;margin-bottom:12px"></div>
+  <div class="row"><select id="qs" style="flex:1"></select><button id="qr" class="g">Reprendre</button></div>
+  <div id="qt" class="note">Choisis une sourate. Touche un verset pour le garder comme repère de lecture.</div>
+  <div id="qa"></div>
+  <div class="note">Traduction de Muhammad Hamidullah. Chaque sourate se charge avec internet, puis reste disponible hors ligne sur ton téléphone.</div>
+</div>
+
+<div class="card">
+  <h2>🌙 Ramadan</h2>
+  <div id="rmd"></div>
+</div>
+
+<div class="card">
+  <h2>✅ Suivi des 5 prières</h2>
+  <div class="row" id="lg"></div>
+  <div id="lh" style="display:flex;justify-content:space-between;margin-top:12px"></div>
+</div>
+
+<div class="card">
+  <h2>📿 Compteur de dhikr</h2>
+  <button id="dn" style="width:100%;font-size:3.5rem;padding:26px 0;border-radius:20px">0</button>
+  <div class="row" style="margin-top:8px;justify-content:space-between"><span>Objectif</span><select id="dg"><option value="33">33</option><option value="99">99</option><option value="100">100</option><option value="0">Sans limite</option></select><button class="g" id="dr">Remettre à zéro</button></div>
+  <div class="note" id="dm"></div>
+</div>
+
+<div class="card">
+  <h2>🧭 Direction de la Qibla</h2>
+  <div style="text-align:center">
+    <svg viewBox="0 0 120 120" width="170" height="170"><circle cx="60" cy="60" r="55" fill="none" stroke="var(--bd)" stroke-width="3"/><g id="qg"><polygon points="60,24 69,62 51,62" fill="var(--ac)"/><text x="60" y="20" text-anchor="middle" font-size="16">🕋</text></g></svg>
+    <div id="qd" style="font-weight:700"></div>
+  </div>
+  <div class="row" style="justify-content:center;margin-top:8px"><button class="g" id="qb">Activer la boussole</button></div>
+  <div class="note" id="qn">Sans boussole, la flèche suppose que le haut du téléphone pointe vers le nord.</div>
+</div>
+
+<div class="card">
+  <h2>🔄 Convertisseur de dates</h2>
+  <div class="note" style="margin:0 0 6px">Grégorien vers tous les calendriers</div>
+  <input type="date" id="cvd" style="width:100%">
+  <div id="cvr"></div>
+  <div class="note" style="margin:14px 0 6px">Autre calendrier vers grégorien</div>
+  <div class="row"><select id="cvc" style="flex:1"></select></div>
+  <div class="row" style="margin-top:8px"><input type="number" id="cvj" placeholder="Jour" min="1" max="31" style="width:80px"><select id="cvm"></select><input type="number" id="cva" placeholder="Année" style="width:100px"><button id="cvb">Convertir</button></div>
+  <div id="cvo" style="margin-top:10px;font-weight:700;text-transform:capitalize"></div>
+</div>
+
+<div class="card">
+  <h2>📅 Calendrier grégorien</h2>
+  <div class="nav"><button class="g" id="pv">◀</button><b id="mt"></b><button class="g" id="nx">▶</button></div>
+  <div class="cal" id="cal"></div>
+</div>
+
+<div class="card">
+  <h2>🌍 Aujourd’hui dans tous les calendriers</h2>
+  <div id="cals"></div>
+</div>
+
+<div class="card">
+  <h2>🕌 ⛪ ✡️ Prochaines fêtes</h2>
+  <div id="evs"></div>
+  <button class="g" id="more" style="width:100%;margin-top:8px">Voir plus</button>
+  <div class="note">Les dates islamiques peuvent varier d’un jour selon l’observation de la lune. Les fêtes commencent la veille au coucher du soleil (islam, judaïsme).</div>
+</div>
+
+<div class="card">
+  <h2>🎂 Mes rappels personnels</h2>
+  <div class="row"><input type="text" id="pn" placeholder="Titre (ex. anniversaire de Mariam)"></div>
+  <div class="row" style="margin-top:8px"><input type="date" id="pd"><input type="time" id="ph"><select id="pt"><option value="anniv">Anniversaire</option><option value="cours">Cours</option><option value="reunion">Réunion</option><option value="autre">Autre</option></select><button id="pa">Ajouter</button></div>
+  <div id="plist"></div>
+  <div class="note">Les anniversaires reviennent chaque année. Sans heure, le rappel sonne à 08:00 (page ouverte). Les jours avec un rappel sont soulignés dans le calendrier.</div>
+</div>
+
+<div class="card">
+  <h2>🔋 Batterie</h2>
+  <div id="bat">Non disponible sur ce navigateur.</div>
+  <div class="bar" style="margin-top:8px"><i id="bar"></i></div>
+</div>
+
+<div id="ring"><h1>⏰</h1><h1 id="rt"></h1><div id="rl"></div>
+  <div class="row"><button id="snz" class="g">Reporter 5 min</button><button id="stp">Arrêter</button></div></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const p2=n=>String(n).padStart(2,'0');
+function sget(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}}
+function sset(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
+
+/* Horloge */
+function tick(){
+  const n=new Date();
+  $('clock').innerHTML=p2(n.getHours())+':'+p2(n.getMinutes())+'<small>:'+p2(n.getSeconds())+'</small>';
+  $('dt').textContent=n.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  $('hj').textContent=HJF.format(n)+' H';
+  checkAlarms(n);
+  if(n.getSeconds()===0)renderPrayers();
+}
+setInterval(tick,1000);
+
+/* Alarmes */
+let alarms=sget('alarms',[]);
+let ringing=null,audio=null,beepTimer=null,lastKey='';
+function renderAlarms(){
+  $('list').innerHTML=alarms.map((a,i)=>'<div class="al"><div><b>'+a.t+'</b><span>'+(a.l||'Alarme')+(a.on?'':' (désactivée)')+'</span></div><div><button class="g" data-t="'+i+'">'+(a.on?'On':'Off')+'</button><button class="r" data-d="'+i+'">✕</button></div></div>').join('')||'<div class="note">Aucune alarme.</div>';
+}
+$('list').onclick=e=>{
+  const t=e.target.dataset;
+  if(t.t!==undefined){alarms[t.t].on=!alarms[t.t].on}
+  if(t.d!==undefined){alarms.splice(t.d,1)}
+  sset('alarms',alarms);renderAlarms();
+};
+$('add').onclick=()=>{
+  const t=$('at').value;if(!t)return;
+  alarms.push({t,l:$('al').value.trim(),on:true});
+  $('al').value='';sset('alarms',alarms);renderAlarms();
+  if('Notification' in window&&Notification.permission==='default'){try{Notification.requestPermission()}catch(e){}}
+  keepAwake();
+};
+function checkAlarms(n){
+  const hm=p2(n.getHours())+':'+p2(n.getMinutes());
+  const key=hm+'-'+n.getDate();
+  if(n.getSeconds()>2||key===lastKey||ringing)return;
+  const a=alarms.find(x=>x.on&&x.t===hm);
+  if(a){lastKey=key;ring(a.t,a.l||'Alarme');return}
+  const td=new Date(n.getFullYear(),n.getMonth(),n.getDate()).getTime();
+  const q=perso.find(e=>nextOcc(e).getTime()===td&&(e.h||'08:00')===hm);
+  if(q){lastKey=key;ring(hm,ICON[q.type]+' '+q.n);return}
+  const pt=prayerTimes(n);
+  const pk=PR.find(k=>k[2]&&cfg.pr[k[0]]&&fmt(pt[k[0]])===hm);
+  if(pk){lastKey=key;ring(hm,'🕌 '+pk[1],cfg.ptone)}
+}
+const TONES={bip:[[880,0,.25,'square',.2]],carillon:[[1047,0,.6,'sine',.3],[1319,.25,.6,'sine',.3],[1568,.5,.9,'sine',.3]],sirene:[[600,0,.4,'sawtooth',.15],[900,.4,.4,'sawtooth',.15]],reveil:[[1000,0,.1,'square',.2],[1000,.2,.1,'square',.2],[1000,.4,.1,'square',.2],[1000,.6,.1,'square',.2]],doux:[[523,0,.8,'sine',.3],[659,.4,.8,'sine',.3],[784,.8,1.2,'sine',.3]],appel:[[392,0,.6,'triangle',.35],[440,.6,.6,'triangle',.35],[349,1.2,.6,'triangle',.35],[392,1.8,1.1,'triangle',.35]]};
+const TN={bip:'Bip classique',carillon:'Carillon',sirene:'Sirène',reveil:'Réveil',doux:'Doux',appel:'Mélodie d’appel',custom:'Ma sonnerie (fichier)'};
+let cfg=Object.assign({tone:'bip',ptone:'appel',custom:'',city:'Mamou',pr:{}},sget('cfg',{}));
+let curTone='bip',customAudio=null;
+function unlock(){try{audio=audio||new (window.AudioContext||window.webkitAudioContext)();if(audio.state==='suspended')audio.resume()}catch(e){}}
+['click','touchstart'].forEach(ev=>document.addEventListener(ev,unlock,{passive:true}));
+function note(f,t0,d,type,v){const t=audio.currentTime,o=audio.createOscillator(),g=audio.createGain();o.type=type;o.frequency.value=f;g.gain.setValueAtTime(v,t+t0);g.gain.exponentialRampToValueAtTime(.001,t+t0+d);o.connect(g);g.connect(audio.destination);o.start(t+t0);o.stop(t+t0+d+.05)}
+function playSynth(name){try{unlock();(TONES[name]||TONES.bip).forEach(x=>note(x[0],x[1],x[2],x[3],x[4]))}catch(e){}}
+function playCustom(){
+  try{if(!customAudio||customAudio.src!==cfg.custom){customAudio=new Audio(cfg.custom);customAudio.loop=true}customAudio.play().catch(()=>{})}catch(e){}
+}
+function stopCustom(){try{if(customAudio){customAudio.pause();customAudio.currentTime=0}}catch(e){}}
+function beep(){
+  if(curTone==='custom'&&cfg.custom)playCustom();else playSynth(curTone==='custom'?'bip':curTone);
+  if(navigator.vibrate)navigator.vibrate([300,150,300]);
+}
+function ring(t,l,tone){
+  curTone=tone||cfg.tone;
+  ringing={t,l};$('rt').textContent=t;$('rl').textContent=l;$('ring').classList.add('on');
+  beep();beepTimer=setInterval(beep,curTone==='custom'?60000:({appel:3300,doux:3000,carillon:2200}[curTone]||1600));
+  try{if('Notification' in window&&Notification.permission==='granted')new Notification('⏰ '+t,{body:l})}catch(e){}
+}
+function stopRing(){clearInterval(beepTimer);stopCustom();$('ring').classList.remove('on');ringing=null}
+$('stp').onclick=stopRing;
+$('snz').onclick=()=>{
+  const r=ringing;stopRing();if(!r)return;
+  const d=new Date(Date.now()+5*60000);
+  alarms.push({t:p2(d.getHours())+':'+p2(d.getMinutes()),l:r.l+' (reporté)',on:true});
+  sset('alarms',alarms);renderAlarms();
+};
+let wl=null;
+async function keepAwake(){try{if(navigator.wakeLock&&(alarms.some(a=>a.on)||perso.length||Object.values(cfg.pr).some(Boolean)))wl=await navigator.wakeLock.request('screen')}catch(e){}}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)keepAwake()});
+
+/* Calendrier grégorien */
+let vm=new Date();vm.setDate(1);
+function renderCal(){
+  const y=vm.getFullYear(),m=vm.getMonth(),now=new Date();
+  $('mt').textContent=vm.toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
+  const first=(new Date(y,m,1).getDay()+6)%7,days=new Date(y,m+1,0).getDate();
+  let h=['L','M','M','J','V','S','D'].map(d=>'<div class="h">'+d+'</div>').join('');
+  for(let i=0;i<first;i++)h+='<div></div>';
+  for(let d=1;d<=days;d++){
+    const t=d===now.getDate()&&m===now.getMonth()&&y===now.getFullYear();
+    const hp=perso.some(e=>{const s=e.d.split('-').map(Number);return s[1]-1===m&&s[2]===d&&(e.type==='anniv'||s[0]===y)});
+    h+='<div'+(t?' class="t"':hp?' class="p"':'')+'>'+d+'</div>';
+  }
+  $('cal').innerHTML=h;
+}
+$('pv').onclick=()=>{vm.setMonth(vm.getMonth()-1);renderCal()};
+$('nx').onclick=()=>{vm.setMonth(vm.getMonth()+1);renderCal()};
+
+/* Autres calendriers */
+const CALS=[
+  ['Islamique (Hijri)','Islam','islamic-umalqura'],
+  ['Hébraïque','Judaïsme','hebrew'],
+  ['Copte','Chrétiens coptes','coptic'],
+  ['Éthiopien','Chrétiens orthodoxes éthiopiens','ethiopic'],
+  ['Chinois','Tradition chinoise, taoïsme, bouddhisme','chinese'],
+  ['Bouddhiste','Bouddhisme','buddhist'],
+  ['Indien national (Saka)','Hindouisme et Inde','indian'],
+  ['Persan (Solaire Hijri)','Iran, bahaïsme, zoroastrisme','persian'],
+  ['Japonais','Shintoïsme, bouddhisme','japanese']
+];
+function renderCals(){
+  const d=new Date();
+  let h='<div class="cc"><div>Grégorien<em>Christianisme (catholiques, protestants)</em></div><div>'+d.toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'})+'</div></div>';
+  CALS.forEach(c=>{
+    let s='—';
+    try{s=new Intl.DateTimeFormat('fr-FR-u-ca-'+c[2],{day:'numeric',month:'long',year:'numeric',era:['buddhist','japanese','coptic','ethiopic','persian'].includes(c[2])?'short':undefined}).format(d)}catch(e){}
+    h+='<div class="cc"><div>'+c[0]+'<em>'+c[1]+'</em></div><div>'+s+'</div></div>';
+  });
+  $('cals').innerHTML=h;
+}
+
+/* Fêtes */
+const fm={};
+function parts(d,cal,monthType){
+  const k=cal+monthType;
+  fm[k]=fm[k]||new Intl.DateTimeFormat('en-u-ca-'+cal,{day:'numeric',month:monthType});
+  const o={};fm[k].formatToParts(d).forEach(x=>o[x.type]=x.value);
+  return o;
+}
+function easter(y){
+  const a=y%19,b=Math.floor(y/100),c=y%100,d=Math.floor(b/4),e=b%4,f=Math.floor((b+8)/25),g=Math.floor((b-f+1)/3),
+  h=(19*a+b-d-g+15)%30,i=Math.floor(c/4),k=c%4,l=(32+2*e+2*i-h-k)%7,m=Math.floor((a+11*h+22*l)/451),
+  mo=Math.floor((h+l-7*m+114)/31),da=((h+l-7*m+114)%31)+1;
+  return new Date(y,mo-1,da);
+}
+function events(){
+  const start=new Date();start.setHours(0,0,0,0);
+  const end=new Date(start);end.setDate(end.getDate()+400);
+  const out=[];
+  const add=(n,r,d)=>{if(d>=start&&d<=end)out.push({n,r,d})};
+  [start.getFullYear(),start.getFullYear()+1].forEach(y=>{
+    add('Épiphanie','Christianisme',new Date(y,0,6));
+    add('Noël orthodoxe et copte','Christianisme',new Date(y,0,7));
+    const e=easter(y);
+    add('Pâques','Christianisme',e);
+    const as=new Date(e);as.setDate(as.getDate()+39);add('Ascension','Christianisme',as);
+    const pe=new Date(e);pe.setDate(pe.getDate()+49);add('Pentecôte','Christianisme',pe);
+    add('Assomption','Christianisme',new Date(y,7,15));
+    add('Toussaint','Christianisme',new Date(y,10,1));
+    add('Noël','Christianisme',new Date(y,11,25));
+  });
+  const seen={};
+  for(let i=0;i<=400;i++){
+    const d=new Date(start);d.setDate(d.getDate()+i);
+    const hj=parts(d,'islamic-umalqura','numeric'),dn=+hj.day,mn=+hj.month;
+    const isl=[[1,1,'Nouvel an islamique (1 Muharram)'],[10,1,'Achoura (10 Muharram)'],[12,3,'Mawlid (naissance du Prophète)'],[1,9,'Début du Ramadan'],[1,10,'Aïd el-Fitr (fin du Ramadan)'],[10,12,'Tabaski (Aïd el-Adha)']];
+    isl.forEach(x=>{if(dn===x[0]&&mn===x[1]&&!seen['i'+x[2]]){seen['i'+x[2]]=1;add(x[2],'Islam',d)}});
+    const hb=parts(d,'hebrew','long'),hd=+hb.day;
+    const heb=[[1,'Tishri','Roch Hachana (nouvel an juif)'],[10,'Tishri','Yom Kippour'],[15,'Nisan','Pessah (Pâque juive)'],[6,'Sivan','Chavouot']];
+    heb.forEach(x=>{if(hd===x[0]&&hb.month===x[1]&&!seen['h'+x[2]]){seen['h'+x[2]]=1;add(x[2],'Judaïsme',d)}});
+    const ch=parts(d,'chinese','numeric');
+    if(ch.day==='1'&&ch.month==='1'&&!seen.c){seen.c=1;add('Nouvel an chinois','Tradition chinoise',d)}
+  }
+  const hb2='Hindouisme (date approximative)',bd='Bouddhisme (date approximative)';
+  add('Makar Sankranti',hb2,new Date(2027,0,14));
+  add('Maha Shivaratri',hb2,new Date(2027,2,5));
+  add('Holi',hb2,new Date(2027,2,22));
+  add('Vesak (naissance du Bouddha)',bd,new Date(2027,4,20));
+  add('Ganesh Chaturthi',hb2,new Date(2027,8,4));
+  add('Diwali (fête des lumières)',hb2,new Date(2027,9,29));
+  return out.sort((a,b)=>a.d-b.d);
+}
+let showAll=false;
+function renderEvs(){
+  const all=events();const l=showAll?all:all.slice(0,14);
+  $('more').textContent=showAll?'Voir moins':'Voir plus';
+  $('evs').innerHTML=l.map(e=>'<div class="ev"><div>'+e.n+'<br><span>'+e.r+'</span></div><span>'+e.d.toLocaleDateString('fr-FR',{weekday:'short',day:'numeric',month:'short',year:'numeric'})+'</span></div>').join('');
+}
+
+/* Sonneries */
+function saveCfg(){try{localStorage.setItem('cfg',JSON.stringify(cfg));return true}catch(e){return false}}
+function initSettings(){
+  const o=Object.keys(TN).map(k=>'<option value="'+k+'">'+TN[k]+'</option>').join('');
+  $('tn').innerHTML=o;$('tp').innerHTML=o;$('tn').value=cfg.tone;$('tp').value=cfg.ptone;
+  const prev=v=>{stopCustom();curTone=v;beep();setTimeout(stopCustom,4000)};
+  $('tn').onchange=()=>{cfg.tone=$('tn').value;saveCfg();prev(cfg.tone)};
+  $('tp').onchange=()=>{cfg.ptone=$('tp').value;saveCfg();prev(cfg.ptone)};
+  $('tf').onchange=()=>{
+    const f=$('tf').files[0];if(!f)return;
+    if(f.size>1500000){$('tmsg').textContent='Fichier trop grand (max 1,5 Mo).';return}
+    const r=new FileReader();
+    r.onload=()=>{
+      cfg.custom=r.result;
+      if(saveCfg()){$('tmsg').textContent='Sonnerie « '+f.name+' » enregistrée. Choisis « Ma sonnerie » dans la liste.'}
+      else{cfg.custom='';$('tmsg').textContent='Impossible d’enregistrer ce fichier.'}
+    };
+    r.readAsDataURL(f);
+  };
+}
+
+/* Heures de prière */
+const CITIES={'Mamou':[10.3833,-12.0833],'Conakry':[9.5092,-13.7122],'Labé':[11.3183,-12.2833],'Kankan':[10.3854,-9.3057],'N’Zérékoré':[7.7562,-8.8179],'Kindia':[10.0569,-12.8664],'Faranah':[10.0404,-10.7434],'Boké':[10.9325,-14.2906],'Siguiri':[11.4167,-9.1667],'Dakar':[14.6928,-17.4467],'Bamako':[12.6392,-8.0029],'Paris':[48.8566,2.3522],'La Mecque':[21.4225,39.8262]};
+const PR=[['fajr','Fajr (Sobh)',1],['sunrise','Lever du soleil',0],['dhuhr','Dhuhr',1],['asr','Asr',1],['maghrib','Maghrib',1],['isha','Isha',1]];
+const rad=Math.PI/180;
+function fmt(d){return p2(d.getHours())+':'+p2(d.getMinutes())}
+function calcPrayers(date,lat,lng){
+  const base=Date.UTC(date.getFullYear(),date.getMonth(),date.getDate());
+  const D=(base+12*3600000)/864e5+2440587.5-2451545;
+  const g=(357.529+.98560028*D)%360,q=(280.459+.98564736*D)%360;
+  const L=(q+1.915*Math.sin(g*rad)+.02*Math.sin(2*g*rad))%360,e=23.439-3.6e-7*D;
+  let RA=Math.atan2(Math.cos(e*rad)*Math.sin(L*rad),Math.cos(L*rad))/rad/15;RA=(RA+24)%24;
+  let eq=q/15-RA;if(eq>12)eq-=24;if(eq<-12)eq+=24;
+  const dec=Math.asin(Math.sin(e*rad)*Math.sin(L*rad)),noon=12-lng/15-eq;
+  const ang=a=>{const c=(-Math.sin(a*rad)-Math.sin(dec)*Math.sin(lat*rad))/(Math.cos(dec)*Math.cos(lat*rad));return Math.acos(Math.max(-1,Math.min(1,c)))/rad/15};
+  const asrA=-Math.atan(1/(1+Math.tan(Math.abs(lat*rad-dec))))/rad;
+  const at=h=>new Date(base+h*3600000);
+  return {fajr:at(noon-ang(18)),sunrise:at(noon-ang(.833)),dhuhr:at(noon),asr:at(noon+ang(asrA)),maghrib:at(noon+ang(.833)),isha:at(noon+ang(17))};
+}
+let ptc={k:'',t:null};
+function prayerTimes(n){
+  const k=n.toDateString()+cfg.city;
+  if(ptc.k!==k){const c=CITIES[cfg.city]||CITIES.Mamou;ptc={k,t:calcPrayers(n,c[0],c[1])}}
+  return ptc.t;
+}
+function renderPrayers(){
+  const n=new Date(),t=prayerTimes(n);
+  if(!$('city').options.length){
+    $('city').innerHTML=Object.keys(CITIES).map(c=>'<option>'+c+'</option>').join('');
+    $('city').value=cfg.city;
+    $('city').onchange=()=>{cfg.city=$('city').value;saveCfg();renderPrayers()};
+  }
+  let nx=null;
+  PR.forEach(p=>{if(p[2]&&!nx&&t[p[0]]>n)nx=p});
+  $('prayers').innerHTML=PR.map(p=>'<div class="al"><b style="font-size:1.1rem">'+p[1]+'</b><div><b>'+fmt(t[p[0]])+'</b> '+(p[2]?'<button class="g" data-pr="'+p[0]+'">'+(cfg.pr[p[0]]?'🔔':'🔕')+'</button>':'')+'</div></div>').join('');
+  if(nx){const m=Math.round((t[nx[0]]-n)/60000);$('nextp').textContent=nx[1]+' dans '+(m>=60?Math.floor(m/60)+' h '+p2(m%60)+' min':m+' min')}
+  else $('nextp').textContent='Fajr demain';
+  renderRamadan();renderLog();renderQibla();
+}
+$('prayers').onclick=e=>{const k=e.target.dataset.pr;if(k){cfg.pr[k]=!cfg.pr[k];saveCfg();renderPrayers();keepAwake()}};
+
+/* Convertisseur */
+const CV=[['islamic-umalqura','Islamique (Hijri)'],['hebrew','Hébraïque'],['coptic','Copte'],['ethiopic','Éthiopien'],['persian','Persan'],['indian','Indien (Saka)']];
+const fy={};
+function pf(d,cal){
+  fy[cal]=fy[cal]||new Intl.DateTimeFormat('en-u-ca-'+cal,{day:'numeric',month:'numeric',year:'numeric'});
+  const o={};fy[cal].formatToParts(d).forEach(x=>o[x.type]=x.value);
+  return {d:+o.day,m:+o.month,y:+o.year};
+}
+function convAll(){
+  const v=$('cvd').value;if(!v){$('cvr').innerHTML='';return}
+  const s=v.split('-').map(Number),d=new Date(s[0],s[1]-1,s[2],12);
+  let h='<div class="cc"><div>Grégorien</div><div>'+d.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'})+'</div></div>';
+  CALS.forEach(c=>{
+    let r='—';
+    try{r=new Intl.DateTimeFormat('fr-FR-u-ca-'+c[2],{day:'numeric',month:'long',year:'numeric',era:['buddhist','japanese','coptic','ethiopic','persian'].includes(c[2])?'short':undefined}).format(d)}catch(e){}
+    h+='<div class="cc"><div>'+c[0]+'</div><div>'+r+'</div></div>';
+  });
+  $('cvr').innerHTML=h;
+}
+function fillMonths(){
+  const cal=$('cvc').value,seen={},now=new Date(),nm=new Intl.DateTimeFormat('fr-FR-u-ca-'+cal,{month:'long'});
+  for(let i=0;i<400;i+=5){
+    const d=new Date(now.getFullYear(),now.getMonth(),now.getDate()+i,12),p=pf(d,cal);
+    if(!seen[p.m])seen[p.m]=nm.format(d);
+  }
+  $('cvm').innerHTML=Object.keys(seen).sort((a,b)=>a-b).map(k=>'<option value="'+k+'">'+seen[k]+'</option>').join('');
+}
+function convBack(){
+  const cal=$('cvc').value,D=+$('cvj').value,M=+$('cvm').value,Y=+$('cva').value;
+  if(!D||!Y){$('cvo').textContent='Entre le jour et l’année.';return}
+  const now=new Date(),py=pf(now,cal).y;
+  const est=Math.round((Y-py)*365.2425*(cal==='islamic-umalqura'?0.9702:1));
+  for(let i=-420;i<=420;i++){
+    const d=new Date(now.getFullYear(),now.getMonth(),now.getDate()+est+i,12),p=pf(d,cal);
+    if(p.y===Y&&p.m===M&&p.d===D){$('cvo').textContent=d.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'});return}
+  }
+  $('cvo').textContent='Date introuvable : vérifie le jour, le mois et l’année.';
+}
+function initConv(){
+  $('cvc').innerHTML=CV.map(c=>'<option value="'+c[0]+'">'+c[1]+'</option>').join('');
+  const n=new Date();$('cvd').value=n.getFullYear()+'-'+p2(n.getMonth()+1)+'-'+p2(n.getDate());
+  $('cvd').onchange=convAll;$('cvc').onchange=fillMonths;$('cvb').onclick=convBack;
+  convAll();fillMonths();
+}
+
+/* Ramadan, suivi des prières, dhikr, Qibla */
+const HJF=new Intl.DateTimeFormat('fr-FR-u-ca-islamic-umalqura',{day:'numeric',month:'long',year:'numeric'});
+let fast=sget('fast',{});
+function renderRamadan(){
+  const now=new Date(),h=pf(now,'islamic-umalqura'),box=$('rmd');
+  if(h.m===9){
+    const t=prayerTimes(now),arr=fast[String(h.y)]||[],done=arr.includes(h.d);
+    const missed=Math.max(0,h.d-1-arr.filter(x=>x<h.d).length);
+    box.innerHTML='<div style="font-size:1.3rem;font-weight:700">Jour '+h.d+' du Ramadan '+h.y+'</div>'
+      +'<div class="cc"><div>Fin du suhoor (Fajr)</div><div>'+fmt(t.fajr)+'</div></div>'
+      +'<div class="cc"><div>Iftar (Maghrib)</div><div>'+fmt(t.maghrib)+'</div></div>'
+      +'<div class="cc"><div>Jours jeûnés</div><div>'+arr.length+'</div></div>'
+      +'<div class="cc"><div>À rattraper (qada)</div><div>'+missed+'</div></div>'
+      +'<button id="fb" style="width:100%;margin-top:8px">'+(done?'✅ J’ai jeûné aujourd’hui (annuler)':'J’ai jeûné aujourd’hui')+'</button>';
+    $('fb').onclick=()=>{
+      const k=String(h.y);fast[k]=fast[k]||[];
+      const i=fast[k].indexOf(h.d);
+      if(i>=0)fast[k].splice(i,1);else fast[k].push(h.d);
+      sset('fast',fast);renderRamadan();
+    };
+  }else{
+    let i=0,d=null;
+    for(;i<400;i++){
+      const x=new Date(now.getFullYear(),now.getMonth(),now.getDate()+i,12),p=pf(x,'islamic-umalqura');
+      if(p.m===9&&p.d===1){d=x;break}
+    }
+    box.innerHTML=d?'<div style="font-size:1.3rem;font-weight:700">Ramadan dans '+i+' jours</div><div class="note">≈ '+d.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'})+' (selon l’observation de la lune)</div>':'';
+  }
+}
+
+let plog=sget('plog',{});
+function dkey(d){return d.getFullYear()+'-'+p2(d.getMonth()+1)+'-'+p2(d.getDate())}
+function renderLog(){
+  const l=plog[dkey(new Date())]||{};
+  $('lg').innerHTML=PR.filter(p=>p[2]).map(p=>'<button class="'+(l[p[0]]?'':'g')+'" data-lg="'+p[0]+'">'+(l[p[0]]?'✅ ':'')+p[1].split(' ')[0]+'</button>').join('');
+  let h='';
+  for(let i=6;i>=0;i--){
+    const d=new Date();d.setDate(d.getDate()-i);
+    const c=Object.values(plog[dkey(d)]||{}).filter(Boolean).length;
+    h+='<div style="text-align:center"><div style="font-weight:700">'+c+'/5</div><span class="note">'+d.toLocaleDateString('fr-FR',{weekday:'short'})+'</span></div>';
+  }
+  $('lh').innerHTML=h;
+}
+$('lg').onclick=e=>{
+  const k=e.target.dataset.lg;if(!k)return;
+  const t=dkey(new Date());plog[t]=plog[t]||{};plog[t][k]=!plog[t][k];
+  sset('plog',plog);renderLog();
+};
+
+let dkr=Object.assign({n:0,g:33},sget('dhikr',{}));
+function renderDhikr(){
+  $('dn').textContent=dkr.n;$('dg').value=String(dkr.g);
+  $('dm').textContent=dkr.g?('Objectif : '+dkr.n+' / '+dkr.g+(dkr.n>=dkr.g?' ✅ objectif atteint':'')):'Sans limite';
+}
+$('dn').onclick=()=>{
+  dkr.n++;sset('dhikr',dkr);
+  if(navigator.vibrate)navigator.vibrate(dkr.g&&dkr.n%dkr.g===0?[200,100,200]:25);
+  renderDhikr();
+};
+$('dg').onchange=()=>{dkr.g=+$('dg').value;sset('dhikr',dkr);renderDhikr()};
+$('dr').onclick=()=>{dkr.n=0;sset('dhikr',dkr);renderDhikr()};
+
+let heading=null;
+function qiblaBearing(){
+  const c=CITIES[cfg.city]||CITIES.Mamou,f1=c[0]*rad,f2=21.4225*rad,dl=(39.8262-c[1])*rad;
+  return (Math.atan2(Math.sin(dl)*Math.cos(f2),Math.cos(f1)*Math.sin(f2)-Math.sin(f1)*Math.cos(f2)*Math.cos(dl))/rad+360)%360;
+}
+function renderQibla(){
+  const b=qiblaBearing(),a=heading===null?b:(b-heading+360)%360;
+  $('qg').setAttribute('transform','rotate('+a+' 60 60)');
+  $('qd').textContent='Qibla : '+Math.round(b)+'° depuis '+cfg.city+(heading===null?'':' · cap '+Math.round(heading)+'°');
+}
+function onOri(e){
+  gotOri=true;let h=null;
+  if(typeof e.webkitCompassHeading==='number')h=e.webkitCompassHeading;
+  else if(e.alpha!==null&&e.alpha!==undefined&&(e.absolute||e.type==='deviceorientationabsolute'))h=(360-e.alpha)%360;
+  if(h!==null){gotHead=true;heading=h;renderQibla()}
+}
+let gotOri=false,gotHead=false;
+$('qb').onclick=async()=>{
+  const nt=$('qn');
+  if(!window.isSecureContext){nt.textContent='Page non sécurisée : ouvre-la avec une adresse en https://.';return}
+  if(!window.DeviceOrientationEvent){nt.textContent='Ce navigateur ne gère pas le capteur de direction : essaie Chrome ou Safari.';return}
+  try{
+    if(window.DeviceOrientationEvent&&typeof DeviceOrientationEvent.requestPermission==='function'){
+      const r=await DeviceOrientationEvent.requestPermission();
+      if(r!=='granted'){$('qn').textContent='Autorisation refusée : réactive l’accès au mouvement et à l’orientation dans les réglages de Safari ou du navigateur.';return}
+    }
+    window.addEventListener('deviceorientationabsolute',onOri,true);
+    window.addEventListener('deviceorientation',onOri,true);
+    gotOri=false;gotHead=false;
+    nt.textContent='Capteur activé… tiens le téléphone à plat et bouge-le un peu.';
+    setTimeout(()=>{
+      nt.textContent=gotHead?'Boussole active : la flèche verte pointe vers la Qibla. Éloigne-toi des objets en métal, ou fais un 8 dans l’air pour calibrer.'
+        :gotOri?'Le capteur répond mais sans direction absolue (pas de boussole sur ce téléphone). Utilise l’angle affiché avec une application boussole.'
+        :'Aucun signal du capteur. Causes possibles : page ouverte dans l’application Claude (ouvre-la dans Chrome ou Safari), capteur absent, ou accès bloqué dans les réglages du navigateur.';
+    },2500);
+  }catch(err){$('qn').textContent='Boussole indisponible sur ce navigateur.'}
+};
+renderDhikr();
+
+/* Hadiths et Coran */
+const HAD=[
+['Les actes ne valent que par les intentions, et chacun n’obtiendra que ce qu’il a eu l’intention d’obtenir.','Boukhari et Mouslim'],
+['Aucun de vous ne croit vraiment tant qu’il n’aime pas pour son frère ce qu’il aime pour lui-même.','Boukhari et Mouslim'],
+['Que celui qui croit en Allah et au Jour dernier dise du bien ou se taise, qu’il honore son voisin et qu’il honore son hôte.','Boukhari et Mouslim'],
+['Ne te mets pas en colère.','Boukhari'],
+['Le fort n’est pas celui qui terrasse les gens, mais celui qui se maîtrise sous l’emprise de la colère.','Boukhari et Mouslim'],
+['Crains Allah où que tu sois, fais suivre une mauvaise action d’une bonne qui l’effacera, et traite les gens avec un beau caractère.','Tirmidhi'],
+['Fait partie de la beauté de l’islam d’une personne le fait de délaisser ce qui ne la concerne pas.','Tirmidhi'],
+['Le musulman est celui dont les musulmans sont à l’abri de sa langue et de sa main.','Boukhari et Mouslim'],
+['Facilitez et ne compliquez pas ; annoncez de bonnes nouvelles et ne faites pas fuir les gens.','Boukhari et Mouslim'],
+['Les croyants, dans leur affection et leur miséricorde mutuelles, sont comme un seul corps : quand un membre souffre, tout le corps veille et a de la fièvre.','Boukhari et Mouslim'],
+['Le meilleur d’entre vous est celui qui apprend le Coran et l’enseigne.','Boukhari'],
+['Celui qui emprunte un chemin à la recherche d’une science, Allah lui facilite un chemin vers le Paradis.','Mouslim'],
+['Celui qui indique le bien est comme celui qui l’accomplit.','Mouslim'],
+['Les actions les plus aimées d’Allah sont les plus régulières, même si elles sont peu nombreuses.','Boukhari et Mouslim'],
+['Quand l’homme meurt, ses œuvres s’interrompent, sauf trois : une aumône continue, une science dont on tire profit, ou un enfant pieux qui invoque pour lui.','Mouslim'],
+['Allah ne regarde pas vos corps ni vos apparences, mais Il regarde vos cœurs et vos actes.','Mouslim'],
+['Deux bienfaits sont souvent perdus par beaucoup de gens : la santé et le temps libre.','Boukhari'],
+['La propreté est la moitié de la foi.','Mouslim'],
+['Ton sourire à ton frère est une aumône.','Tirmidhi'],
+['Le meilleur d’entre vous est celui qui est le meilleur envers sa famille.','Tirmidhi'],
+['Celui qui ne remercie pas les gens ne remercie pas Allah.','Abou Daoud et Tirmidhi'],
+['Laisse ce qui te met dans le doute pour ce qui ne te met pas dans le doute.','Tirmidhi et Nasa’i'],
+['Veille sur Allah, Il veillera sur toi ; veille sur Allah, tu Le trouveras devant toi.','Tirmidhi'],
+['Allah a prescrit l’excellence (ihsan) en toute chose.','Mouslim'],
+['Deux paroles légères sur la langue, lourdes dans la balance et aimées du Tout-Miséricordieux : « Soubhan Allah wa bihamdihi, Soubhan Allah al-Azim ».','Boukhari et Mouslim'],
+['Quiconque dit « Soubhan Allah wa bihamdihi » cent fois par jour, ses péchés sont effacés, même s’ils sont comme l’écume de la mer.','Boukhari et Mouslim'],
+['Celui qui soulage un croyant d’une peine de ce monde, Allah le soulagera d’une peine du Jour de la Résurrection.','Mouslim'],
+['La religion est le bon conseil (an-nasiha).','Mouslim'],
+['Allah est Bon et n’accepte que ce qui est bon.','Mouslim'],
+['Dis : « J’ai cru en Allah », puis sois droit.','Mouslim'],
+['Le croyant n’est ni médisant, ni maudisseur, ni obscène, ni grossier.','Tirmidhi'],
+['Une bonne parole est une aumône.','Boukhari et Mouslim']
+];
+const dayN=()=>{const d=new Date();return Math.floor(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())/864e5)};
+let hi=dayN()%HAD.length;const hToday=hi;
+function renderHadith(){
+  const h=HAD[hi];
+  $('hd').innerHTML='<div style="font-size:1.1rem">« '+h[0]+' »</div>';
+  $('hs').textContent=(hi===hToday?'Hadith du jour · ':'')+'Rapporté par '+h[1]+' · '+(hi+1)+'/'+HAD.length;
+}
+$('hp').onclick=()=>{hi=(hi+HAD.length-1)%HAD.length;renderHadith()};
+$('hn').onclick=()=>{hi=(hi+1)%HAD.length;renderHadith()};
+$('hr').onclick=()=>{hi=Math.floor(Math.random()*HAD.length);renderHadith()};
+$('hw').onclick=()=>{
+  const h=HAD[hi],t='« '+h[0]+' » (Rapporté par '+h[1]+')';
+  if(navigator.share){navigator.share({text:t}).catch(()=>{})}
+  else window.open('https://wa.me/?text='+encodeURIComponent(t),'_blank');
+};
+
+const SN='Al-Fatiha|Al-Baqara|Al-Imran|An-Nissa|Al-Ma’ida|Al-An’am|Al-A’raf|Al-Anfal|At-Tawba|Younous|Houd|Youssouf|Ar-Ra’d|Ibrahim|Al-Hijr|An-Nahl|Al-Isra|Al-Kahf|Maryam|Ta-Ha|Al-Anbiya|Al-Hajj|Al-Mou’minoun|An-Nour|Al-Fourqan|Ach-Chou’ara|An-Naml|Al-Qasas|Al-Ankabout|Ar-Roum|Louqman|As-Sajda|Al-Ahzab|Saba|Fatir|Ya-Sin|As-Saffat|Sad|Az-Zoumar|Ghafir|Foussilat|Ach-Choura|Az-Zoukhrouf|Ad-Doukhan|Al-Jathiya|Al-Ahqaf|Mouhammad|Al-Fath|Al-Houjourat|Qaf|Adh-Dhariyat|At-Tour|An-Najm|Al-Qamar|Ar-Rahman|Al-Waqi’a|Al-Hadid|Al-Moujadila|Al-Hachr|Al-Moumtahana|As-Saff|Al-Joumou’a|Al-Mounafiqoun|At-Taghabon|At-Talaq|At-Tahrim|Al-Moulk|Al-Qalam|Al-Haqqa|Al-Ma’arij|Nouh|Al-Jinn|Al-Mouzzammil|Al-Mouddaththir|Al-Qiyama|Al-Insan|Al-Moursalat|An-Naba|An-Nazi’at|Abasa|At-Takwir|Al-Infitar|Al-Moutaffifin|Al-Inshiqaq|Al-Bourouj|At-Tariq|Al-A’la|Al-Ghachiya|Al-Fajr|Al-Balad|Ach-Chams|Al-Layl|Ad-Dhouha|Ach-Charh|At-Tin|Al-Alaq|Al-Qadr|Al-Bayyina|Az-Zalzala|Al-Adiyat|Al-Qari’a|At-Takathour|Al-Asr|Al-Houmaza|Al-Fil|Qouraych|Al-Ma’oun|Al-Kawthar|Al-Kafiroun|An-Nasr|Al-Massad|Al-Ikhlas|Al-Falaq|An-Nas'.split('|');
+const QB='https://api.alquran.cloud/v1/',QE='quran-uthmani,fr.hamidullah';
+let qbm=sget('qbm',null);
+function qcache(k){try{const v=localStorage.getItem(k);return v?JSON.parse(v):null}catch(e){return null}}
+function qsave(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
+function noBism(t,s,a){return (a===1&&s!==1&&s!==9&&t.startsWith('بِسْمِ'))?t.split(' ').slice(4).join(' '):t}
+async function loadSurah(n){
+  const c=qcache('q_'+n);if(c)return c;
+  const r=await fetch(QB+'surah/'+n+'/editions/'+QE),j=await r.json();
+  const ar=j.data[0].ayahs,fr=j.data[1].ayahs;
+  const list=ar.map((x,i)=>[x.numberInSurah,noBism(x.text,n,x.numberInSurah),fr[i].text]);
+  qsave('q_'+n,list);return list;
+}
+function markBm(){
+  document.querySelectorAll('#qa .vs').forEach(v=>{v.style.background=(qbm&&qbm.s===+$('qs').value&&qbm.a===+v.dataset.a)?'var(--ac2)':''});
+}
+async function showSurah(n){
+  if(!n)return;
+  $('qt').textContent='Chargement…';$('qa').innerHTML='';
+  try{
+    const list=await loadSurah(n);
+    $('qt').textContent=SN[n-1]+' · '+list.length+' versets. Touche un verset pour le garder comme repère.';
+    $('qa').innerHTML=list.map(x=>'<div class="vs" data-a="'+x[0]+'" style="padding:10px 6px;border-top:1px solid var(--bd);border-radius:8px"><div dir="rtl" lang="ar" style="font-size:1.5rem;line-height:2;text-align:right">'+x[1]+' ﴿'+x[0]+'﴾</div><div style="margin-top:4px">'+esc(x[2])+'</div></div>').join('');
+    markBm();
+  }catch(e){$('qt').textContent='Connexion indisponible. Ouvre la page depuis ton site (https) avec internet : la sourate sera ensuite mémorisée pour le hors ligne.'}
+}
+$('qa').onclick=e=>{
+  const v=e.target.closest('.vs');if(!v)return;
+  qbm={s:+$('qs').value,a:+v.dataset.a};sset('qbm',qbm);markBm();
+  $('qt').textContent='Repère enregistré : '+SN[qbm.s-1]+', verset '+qbm.a;
+};
+async function verseOfDay(){
+  const k='qod_'+dkey(new Date());
+  try{
+    let v=qcache(k);
+    if(!v){
+      const num=((dayN()*37)%6236)+1;
+      const r=await fetch(QB+'ayah/'+num+'/editions/'+QE),j=await r.json(),a=j.data[0],f=j.data[1];
+      v={s:a.surah.number,a:a.numberInSurah,ar:noBism(a.text,a.surah.number,a.numberInSurah),fr:f.text};qsave(k,v);
+    }
+    $('qv').innerHTML='<b>Verset du jour</b> · '+SN[v.s-1]+' '+v.s+':'+v.a+'<div dir="rtl" lang="ar" style="font-size:1.5rem;line-height:2;text-align:right">'+v.ar+'</div><div>'+esc(v.fr)+'</div>';
+  }catch(e){$('qv').textContent='Verset du jour indisponible (connexion requise la première fois).'}
+}
+function initQuran(){
+  $('qs').innerHTML='<option value="0">Choisir une sourate…</option>'+SN.map((n,i)=>'<option value="'+(i+1)+'">'+(i+1)+'. '+n+'</option>').join('');
+  $('qs').onchange=()=>showSurah(+$('qs').value);
+  $('qr').onclick=async()=>{
+    if(!qbm){$('qt').textContent='Aucun repère pour l’instant : ouvre une sourate et touche un verset.';return}
+    $('qs').value=String(qbm.s);await showSurah(qbm.s);
+    const el=document.querySelector('#qa [data-a="'+qbm.a+'"]');if(el)el.scrollIntoView({block:'center'});
+  };
+  verseOfDay();
+}
+renderHadith();initQuran();
+
+/* Rappels personnels */
+const ICON={anniv:'🎂',cours:'📚',reunion:'👥',autre:'📌'};
+let perso=sget('perso',[]);
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function nextOcc(e){
+  const s=e.d.split('-').map(Number);
+  const now=new Date();now.setHours(0,0,0,0);
+  let dt=new Date(s[0],s[1]-1,s[2]);
+  if(e.type==='anniv'){dt=new Date(now.getFullYear(),s[1]-1,s[2]);if(dt<now)dt=new Date(now.getFullYear()+1,s[1]-1,s[2])}
+  return dt;
+}
+function renderPerso(){
+  const now=new Date();now.setHours(0,0,0,0);
+  const l=perso.map((e,i)=>({e,i,dt:nextOcc(e)})).sort((a,b)=>a.dt-b.dt);
+  $('plist').innerHTML=l.map(x=>{
+    const diff=Math.round((x.dt-now)/864e5);
+    const lab=diff<0?'passé':diff===0?'Aujourd’hui':diff===1?'Demain':'dans '+diff+' jours';
+    return '<div class="al"><div><b style="font-size:1.05rem">'+ICON[x.e.type]+' '+esc(x.e.n)+'</b><span>'+x.dt.toLocaleDateString('fr-FR',{weekday:'short',day:'numeric',month:'long',year:'numeric'})+(x.e.h?' à '+x.e.h:'')+' · '+lab+'</span></div><button class="r" data-p="'+x.i+'">✕</button></div>';
+  }).join('')||'<div class="note">Aucun rappel personnel.</div>';
+  renderCal();
+}
+$('pa').onclick=()=>{
+  const n=$('pn').value.trim(),d=$('pd').value;
+  if(!n||!d)return;
+  perso.push({n,d,h:$('ph').value,type:$('pt').value});
+  $('pn').value='';sset('perso',perso);renderPerso();keepAwake();
+};
+$('plist').onclick=e=>{
+  const i=e.target.dataset.p;
+  if(i!==undefined){perso.splice(i,1);sset('perso',perso);renderPerso()}
+};
+$('more').onclick=()=>{showAll=!showAll;renderEvs()};
+
+/* Batterie */
+if(navigator.getBattery){
+  navigator.getBattery().then(b=>{
+    const u=()=>{
+      const p=Math.round(b.level*100);
+      $('bat').textContent=p+' % — '+(b.charging?'en charge ⚡':'pas en charge');
+      $('bar').style.width=p+'%';
+      if(b.charging&&p>=100&&!ringing)ring('🔋','Batterie pleine, tu peux débrancher');
+    };
+    b.onlevelchange=u;b.onchargingchange=u;u();
+  }).catch(()=>{});
+}
+
+renderAlarms();renderPerso();renderCals();renderEvs();initSettings();renderPrayers();initConv();tick();keepAwake();
+
+/* Mode hors ligne et installation */
+let dip=null;
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();dip=e;$('inst').style.display='block'});
+$('inst').onclick=async()=>{if(!dip)return;dip.prompt();try{await dip.userChoice}catch(e){}dip=null;$('inst').style.display='none'};
+if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol)){navigator.serviceWorker.register('sw.js').catch(()=>{})}
+</script>
+</body>
+</html>
