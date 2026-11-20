@@ -7,6 +7,7 @@ var PAGES=[
   ['index.html','🏠','Accueil'],
   ['calendriers.html','🕌','Calendriers et prières'],
   ['coran-audio.html','📖','Coran audio'],
+  ['histoire-prophetes.html','📚','Histoire des prophètes'],
   ['adhkar.html','📿','Adhkar'],
   ['livre-comptes.html','💰','Livre de comptes']
 ];
@@ -38,3 +39,4 @@ function build(){
 }
 if(document.body)build();else document.addEventListener('DOMContentLoaded',build);
 })();
+
