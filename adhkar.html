@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Adhkar</title>
+<link rel="manifest" href="manifest-adhkar.json">
+<meta name="theme-color" content="#071A38">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root{--bg:#F5F8FC;--card:#fff;--tx:#0F172A;--mu:#5B6B85;--ac:#2563EB;--ac2:#E6EEFC;--bd:#E3E9F2;--red:#D9060C;--gold:#FAB202;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#0B1626;--card:#101E33;--tx:#EAF0FA;--mu:#9FB0C8;--ac:#3B82F6;--ac2:#16294A;--bd:#22314A;--red:#ff7b6b;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:calc(12px + env(safe-area-inset-top,0px)) 12px calc(12px + env(safe-area-inset-bottom,0px));max-width:640px;margin-inline:auto}
+h1{font-size:1.2rem;margin:0 0 12px;color:var(--ac)}
+h2{font-size:1rem;margin:0 0 10px;color:var(--ac);border-bottom:2px solid var(--gold);display:inline-block;padding-bottom:3px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:18px;padding:14px;margin-bottom:12px;box-shadow:0 2px 10px rgba(0,0,0,.06)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
+input,select,button{font:inherit;border-radius:10px;border:1px solid var(--bd);padding:9px 10px;background:var(--bg);color:var(--tx)}
+button{background:var(--ac);color:#fff;border:0;font-weight:600;cursor:pointer}
+button.g{background:var(--ac2);color:var(--ac)}
+.tabs{display:flex;gap:6px;margin-bottom:12px}
+.tabs button{flex:1;background:var(--ac2);color:var(--ac)}
+.tabs button.on{background:var(--ac);color:#fff}
+.ar{font-size:1.5rem;line-height:2;text-align:right}
+.fr{margin-top:4px}
+.src{color:var(--mu);font-size:.8rem;margin-top:4px}
+.cnt{width:100%;margin-top:10px;font-size:1.1rem;padding:12px}
+.cnt.done{background:var(--ac2);color:var(--ac)}
+.note{color:var(--mu);font-size:.8rem;margin-top:8px}
+.bar{height:10px;border-radius:5px;background:var(--bd);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--ac);width:0}
+a.back{display:inline-block;margin-bottom:8px;color:var(--ac);text-decoration:none;font-size:.9rem}
+#bn{display:none;background:var(--gold);color:#000;border-radius:14px;padding:12px;margin-bottom:12px;font-weight:600;text-align:center}
+</style>
+<script src="menu.js" defer></script>
+</head>
+<body>
+<h1>📿 Adhkar du matin et du soir</h1>
+
+<div id="bn"></div>
+
+<div class="tabs">
+  <button data-t="m">☀️ Matin</button>
+  <button data-t="s">🌙 Soir</button>
+  <button data-t="p">🕌 Après la prière</button>
+</div>
+
+<div class="card">
+  <div class="bar"><i id="pb"></i></div>
+  <div class="note" id="pt"></div>
+  <div class="row"><button class="g" id="rs">Recommencer cette série</button></div>
+</div>
+
+<div id="ls"></div>
+
+<div class="card">
+  <h2>⏰ Rappels</h2>
+  <div class="row" style="margin-top:0"><label style="flex:1"><input type="checkbox" id="rm"> Matin</label><input type="time" id="tm"></div>
+  <div class="row"><label style="flex:1"><input type="checkbox" id="rv"> Soir</label><input type="time" id="tv"></div>
+  <div class="note">Le rappel s’affiche et sonne seulement si cette page reste ouverte (écran allumé).</div>
+</div>
+
+<div class="note" style="padding:0 6px">Traductions françaises à titre indicatif. Vérifie les textes et leur authenticité auprès d’un savant ou d’un recueil fiable. Les versets viennent de la traduction de Hamidullah (internet requis la première fois).</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const p2=n=>String(n).padStart(2,'0');
+function sget(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}}
+function sset(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const dkey=()=>{const d=new Date();return d.getFullYear()+'-'+p2(d.getMonth()+1)+'-'+p2(d.getDate())};
+
+const KURSI={q:[2,255,255],fr:'Ayat al-Kursi',src:'An-Nasa’i',n:1};
+const FAT={q:[112,1,4],fr:'Sourate Al-Ikhlas',src:'Abou Daoud, Tirmidhi',n:3};
+const FAL={q:[113,1,5],fr:'Sourate Al-Falaq',src:'Abou Daoud, Tirmidhi',n:3};
+const NAS={q:[114,1,6],fr:'Sourate An-Nas',src:'Abou Daoud, Tirmidhi',n:3};
+const COMMUN=[
+ {ar:'بِسْمِ اللَّهِ الَّذِي لَا يَضُرُّ مَعَ اسْمِهِ شَيْءٌ فِي الْأَرْضِ وَلَا فِي السَّمَاءِ وَهُوَ السَّمِيعُ الْعَلِيمُ',fr:'Au nom d’Allah, avec le nom de qui rien ne nuit, ni sur terre ni dans le ciel, et Il est l’Audient, l’Omniscient.',src:'Abou Daoud, Tirmidhi',n:3},
+ {ar:'رَضِيتُ بِاللَّهِ رَبًّا وَبِالْإِسْلَامِ دِينًا وَبِمُحَمَّدٍ نَبِيًّا',fr:'J’agrée Allah comme Seigneur, l’islam comme religion et Muhammad comme prophète.',src:'Abou Daoud',n:3},
+ {ar:'سُبْحَانَ اللَّهِ وَبِحَمْدِهِ',fr:'Gloire et louange à Allah.',src:'Mouslim',n:100},
+ {ar:'لَا إِلَٰهَ إِلَّا اللَّهُ وَحْدَهُ لَا شَرِيكَ لَهُ، لَهُ الْمُلْكُ وَلَهُ الْحَمْدُ وَهُوَ عَلَىٰ كُلِّ شَيْءٍ قَدِيرٌ',fr:'Il n’y a de divinité digne d’adoration qu’Allah, Seul, sans associé. À Lui la royauté, à Lui la louange, et Il est capable de toute chose.',src:'',n:10},
+ {ar:'أَسْتَغْفِرُ اللَّهَ',fr:'Je demande pardon à Allah. (à répartir dans la journée)',src:'Mouslim',n:100}
+];
+const DATA={
+ m:[KURSI,FAT,FAL,NAS,
+  {ar:'اللَّهُمَّ بِكَ أَصْبَحْنَا وَبِكَ أَمْسَيْنَا وَبِكَ نَحْيَا وَبِكَ نَمُوتُ وَإِلَيْكَ النُّشُورُ',fr:'Ô Allah, c’est par Toi que nous atteignons le matin et le soir, par Toi que nous vivons et mourons, et vers Toi est la résurrection.',src:'Tirmidhi',n:1}
+ ].concat(COMMUN),
+ s:[KURSI,FAT,FAL,NAS,
+  {ar:'اللَّهُمَّ بِكَ أَمْسَيْنَا وَبِكَ أَصْبَحْنَا وَبِكَ نَحْيَا وَبِكَ نَمُوتُ وَإِلَيْكَ الْمَصِيرُ',fr:'Ô Allah, c’est par Toi que nous atteignons le soir et le matin, par Toi que nous vivons et mourons, et vers Toi est le retour.',src:'Tirmidhi',n:1},
+  {ar:'أَعُوذُ بِكَلِمَاتِ اللَّهِ التَّامَّاتِ مِنْ شَرِّ مَا خَلَقَ',fr:'Je cherche refuge dans les paroles parfaites d’Allah contre le mal de ce qu’Il a créé.',src:'Mouslim',n:3}
+ ].concat(COMMUN),
+ p:[
+  {ar:'أَسْتَغْفِرُ اللَّهَ',fr:'Je demande pardon à Allah.',src:'Mouslim',n:3},
+  {ar:'اللَّهُمَّ أَنْتَ السَّلَامُ وَمِنْكَ السَّلَامُ تَبَارَكْتَ يَا ذَا الْجَلَالِ وَالْإِكْرَامِ',fr:'Ô Allah, Tu es la Paix et de Toi vient la paix. Béni sois-Tu, Ô Détenteur de la majesté et de la générosité.',src:'Mouslim',n:1},
+  KURSI,
+  {ar:'سُبْحَانَ اللَّهِ',fr:'Gloire à Allah.',src:'Boukhari, Mouslim',n:33},
+  {ar:'الْحَمْدُ لِلَّهِ',fr:'Louange à Allah.',src:'Boukhari, Mouslim',n:33},
+  {ar:'اللَّهُ أَكْبَرُ',fr:'Allah est le plus grand.',src:'Boukhari, Mouslim',n:33},
+  {ar:'لَا إِلَٰهَ إِلَّا اللَّهُ وَحْدَهُ لَا شَرِيكَ لَهُ، لَهُ الْمُلْكُ وَلَهُ الْحَمْدُ وَهُوَ عَلَىٰ كُلِّ شَيْءٍ قَدِيرٌ',fr:'Pour compléter les cent.',src:'Mouslim',n:1}
+ ]
+};
+
+let tab=(new Date().getHours()<15)?'m':'s';
+let st=sget('adh_'+dkey(),{});
+let cfg=Object.assign({m:'06:00',s:'17:30',rm:false,rv:false},sget('adh_cfg',{}));
+
+/* Versets */
+const QB='https://api.alquran.cloud/v1/',QE='quran-uthmani,fr.hamidullah';
+function noBism(t,s,a){return (a===1&&s!==1&&s!==9&&t.startsWith('بِسْمِ'))?t.split(' ').slice(4).join(' '):t}
+async function verses(s,a1,a2){
+  const k='qa_'+s;let list=sget(k,null);
+  if(!list){
+    const r=await fetch(QB+'surah/'+s+'/editions/'+QE);if(!r.ok)throw 0;
+    const j=await r.json(),ar=j.data[0].ayahs,fr=j.data[1].ayahs;
+    list=ar.map((x,i)=>[x.numberInSurah,noBism(x.text,s,x.numberInSurah),fr[i].text,x.number]);
+    sset(k,list);
+  }
+  return list.filter(x=>x[0]>=a1&&x[0]<=a2);
+}
+
+function key(i){return tab+i}
+function render(){
+  document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on',b.dataset.t===tab));
+  const items=DATA[tab];
+  $('ls').innerHTML=items.map((it,i)=>{
+    const d=st[key(i)]||0,fin=d>=it.n;
+    return '<div class="card"><div id="v'+i+'">'+(it.q?'<b>'+esc(it.fr)+'</b><div class="note">Chargement…</div>':'<div class="ar" dir="rtl" lang="ar">'+it.ar+'</div><div class="fr">'+esc(it.fr)+'</div>')+'</div>'
+      +(it.src?'<div class="src">'+esc(it.src)+'</div>':'')
+      +'<button class="cnt'+(fin?' done':'')+'" data-c="'+i+'">'+(fin?'✅ Terminé ('+it.n+'×)':d+' / '+it.n+' · touche pour compter')+'</button></div>';
+  }).join('');
+  items.forEach((it,i)=>{if(it.q)fillQ(it,i)});
+  progress();
+}
+async function fillQ(it,i){
+  const el=$('v'+i),t=tab;
+  try{
+    const vs=await verses(it.q[0],it.q[1],it.q[2]);
+    if(t!==tab||!el.isConnected)return;
+    el.innerHTML='<b>'+esc(it.fr)+'</b>'+vs.map(v=>'<div class="ar" dir="rtl" lang="ar">'+v[1]+' ﴿'+v[0]+'﴾</div><div class="fr">'+esc(v[2])+'</div>').join('');
+  }catch(e){el.innerHTML='<b>'+esc(it.fr)+'</b><div class="note">Texte indisponible : connexion requise la première fois.</div>'}
+}
+function progress(){
+  const items=DATA[tab],tot=items.reduce((a,x)=>a+x.n,0),done=items.reduce((a,x,i)=>a+Math.min(x.n,st[key(i)]||0),0);
+  $('pb').style.width=Math.round(done/tot*100)+'%';
+  $('pt').textContent=(done>=tot?'✅ Série terminée, qu’Allah l’accepte. ':'')+done+' / '+tot+' récitations aujourd’hui';
+}
+$('ls').onclick=e=>{
+  const b=e.target.closest('[data-c]');if(!b)return;
+  const i=+b.dataset.c,it=DATA[tab][i],k=key(i);
+  if((st[k]||0)>=it.n)return;
+  st[k]=(st[k]||0)+1;sset('adh_'+dkey(),st);
+  if(navigator.vibrate)navigator.vibrate(st[k]>=it.n?[120,60,120]:20);
+  const fin=st[k]>=it.n;
+  b.className='cnt'+(fin?' done':'');
+  b.textContent=fin?'✅ Terminé ('+it.n+'×)':st[k]+' / '+it.n+' · touche pour compter';
+  progress();
+};
+document.querySelector('.tabs').onclick=e=>{const t=e.target.dataset.t;if(t){tab=t;render()}};
+$('rs').onclick=()=>{
+  if(!confirm('Remettre cette série à zéro ?'))return;
+  DATA[tab].forEach((_,i)=>delete st[key(i)]);sset('adh_'+dkey(),st);render();
+};
+
+/* Rappels */
+function saveCfg(){sset('adh_cfg',cfg)}
+$('tm').value=cfg.m;$('tv').value=cfg.s;$('rm').checked=cfg.rm;$('rv').checked=cfg.rv;
+$('tm').onchange=()=>{cfg.m=$('tm').value;saveCfg()};
+$('tv').onchange=()=>{cfg.s=$('tv').value;saveCfg()};
+function askNotif(){try{if('Notification' in window&&Notification.permission==='default')Notification.requestPermission()}catch(e){}}
+$('rm').onchange=()=>{cfg.rm=$('rm').checked;saveCfg();if(cfg.rm)askNotif()};
+$('rv').onchange=()=>{cfg.rv=$('rv').checked;saveCfg();if(cfg.rv)askNotif()};
+let ac=null,last='';
+function beep(){
+  try{
+    ac=ac||new (window.AudioContext||window.webkitAudioContext)();if(ac.state==='suspended')ac.resume();
+    [[523,0],[659,.4],[784,.8]].forEach(x=>{const t=ac.currentTime,o=ac.createOscillator(),g=ac.createGain();o.type='sine';o.frequency.value=x[0];g.gain.setValueAtTime(.3,t+x[1]);g.gain.exponentialRampToValueAtTime(.001,t+x[1]+.8);o.connect(g);g.connect(ac.destination);o.start(t+x[1]);o.stop(t+x[1]+.85)});
+  }catch(e){}
+}
+['click','touchstart'].forEach(ev=>document.addEventListener(ev,()=>{try{ac=ac||new (window.AudioContext||window.webkitAudioContext)();if(ac.state==='suspended')ac.resume()}catch(e){}},{passive:true}));
+function remind(t){
+  const bn=$('bn');bn.style.display='block';
+  bn.textContent=t==='m'?'☀️ C’est l’heure des adhkar du matin (touche pour ouvrir)':'🌙 C’est l’heure des adhkar du soir (touche pour ouvrir)';
+  bn.onclick=()=>{bn.style.display='none';tab=t;render();window.scrollTo(0,0)};
+  beep();if(navigator.vibrate)navigator.vibrate([300,150,300]);
+  try{if('Notification' in window&&Notification.permission==='granted')new Notification(t==='m'?'Adhkar du matin':'Adhkar du soir')}catch(e){}
+}
+setInterval(()=>{
+  const n=new Date(),hm=p2(n.getHours())+':'+p2(n.getMinutes()),k=dkey()+hm;
+  if(k===last)return;
+  if(cfg.rm&&cfg.m===hm){last=k;remind('m')}
+  else if(cfg.rv&&cfg.s===hm){last=k;remind('s')}
+},15000);
+
+render();
+if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol)){navigator.serviceWorker.register('sw.js').catch(()=>{})}
+</script>
+</body>
+</html>

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Livre de comptes</title>
+<link rel="manifest" href="manifest-comptes.json">
+<meta name="theme-color" content="#071A38">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root{--bg:#F5F8FC;--card:#fff;--tx:#0F172A;--mu:#5B6B85;--ac:#2563EB;--ac2:#E6EEFC;--bd:#E3E9F2;--red:#D9060C;--gold:#FAB202;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#0B1626;--card:#101E33;--tx:#EAF0FA;--mu:#9FB0C8;--ac:#3B82F6;--ac2:#16294A;--bd:#22314A;--red:#ff7b6b;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:calc(12px + env(safe-area-inset-top,0px)) 12px calc(12px + env(safe-area-inset-bottom,0px));max-width:640px;margin-inline:auto}
+h1{font-size:1.2rem;margin:0 0 12px;color:var(--ac)}
+h2{font-size:1rem;margin:0 0 10px;color:var(--ac);border-bottom:2px solid var(--gold);display:inline-block;padding-bottom:3px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:18px;padding:14px;margin-bottom:12px;box-shadow:0 2px 10px rgba(0,0,0,.06)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
+input,select,button{font:inherit;border-radius:10px;border:1px solid var(--bd);padding:9px 10px;background:var(--bg);color:var(--tx)}
+button{background:var(--ac);color:#fff;border:0;font-weight:600;cursor:pointer}
+button.g{background:var(--ac2);color:var(--ac)}
+button.r{background:transparent;color:var(--red);padding:6px 10px}
+input[type=text]{flex:1;min-width:130px}
+input[type=number]{width:140px}
+.sum{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.sum div{background:var(--ac2);border-radius:12px;padding:10px;text-align:center}
+.sum b{display:block;font-size:1.05rem;font-variant-numeric:tabular-nums}
+.sum span{font-size:.8rem;color:var(--mu)}
+.sum .full{grid-column:1/-1}
+.pos{color:#17A34A}.neg{color:var(--red)}
+.it{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--bd)}
+.it span{color:var(--mu);font-size:.82rem;display:block}
+.it b{font-variant-numeric:tabular-nums;white-space:nowrap}
+.note{color:var(--mu);font-size:.8rem;margin-top:8px}
+.bar{height:8px;border-radius:4px;background:var(--bd);overflow:hidden;margin-top:3px}
+.bar i{display:block;height:100%;background:var(--red)}
+.cat{margin-top:8px;font-size:.9rem}
+.cat div{display:flex;justify-content:space-between}
+a.back{display:inline-block;margin-bottom:8px;color:var(--ac);text-decoration:none;font-size:.9rem}
+</style>
+<script src="menu.js" defer></script>
+</head>
+<body>
+<h1>💰 Livre de comptes</h1>
+
+<div class="card">
+  <h2>Résumé</h2>
+  <div class="row" style="margin-top:0"><input type="month" id="mo"><label style="font-size:.9rem"><input type="checkbox" id="all"> Tout afficher</label></div>
+  <div class="sum" style="margin-top:10px">
+    <div><span>Recettes</span><b class="pos" id="sr">0</b></div>
+    <div><span>Dépenses</span><b class="neg" id="sd">0</b></div>
+    <div><span>Solde de la période</span><b id="sp">0</b></div>
+    <div><span>Solde total</span><b id="st">0</b></div>
+  </div>
+  <div class="cat" id="cats"></div>
+</div>
+
+<div class="card">
+  <h2>Nouvelle opération</h2>
+  <div class="row" style="margin-top:0">
+    <select id="ty"><option value="r">➕ Recette</option><option value="d" selected>➖ Dépense</option></select>
+    <input type="number" id="mt" inputmode="numeric" placeholder="Montant (GNF)" min="0">
+  </div>
+  <div class="row"><input type="text" id="lb" placeholder="Libellé (ex. riz, transport)"></div>
+  <div class="row"><select id="ct"></select><input type="date" id="dt"><button id="ad">Ajouter</button></div>
+  <div class="note" id="msg"></div>
+</div>
+
+<div class="card">
+  <h2>Opérations</h2>
+  <div id="ls"></div>
+  <div class="row"><button class="g" id="ex">Exporter en CSV</button></div>
+  <div class="note">Les données restent sur ce téléphone (navigateur). Exporte régulièrement pour garder une copie.</div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const p2=n=>String(n).padStart(2,'0');
+function sget(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}}
+function sset(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){return false}}
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money=n=>Math.round(n).toLocaleString('fr-FR')+' GNF';
+const CATS=['Salaire','Cours particuliers','Vente','Nourriture','Transport','Loyer','Santé','Scolarité','Communication','Famille','Autre'];
+let data=sget('lc',[]);
+
+function today(){const n=new Date();return n.getFullYear()+'-'+p2(n.getMonth()+1)+'-'+p2(n.getDate())}
+function render(){
+  const all=$('all').checked,mo=$('mo').value;
+  const list=data.filter(e=>all||e.d.slice(0,7)===mo).sort((a,b)=>b.d.localeCompare(a.d)||b.id-a.id);
+  const sum=(a,t)=>a.filter(e=>e.t===t).reduce((s,e)=>s+e.m,0);
+  const r=sum(list,'r'),d=sum(list,'d'),tot=sum(data,'r')-sum(data,'d');
+  $('sr').textContent=money(r);$('sd').textContent=money(d);
+  const sp=$('sp');sp.textContent=money(r-d);sp.className=r-d>=0?'pos':'neg';
+  const st=$('st');st.textContent=money(tot);st.className=tot>=0?'pos':'neg';
+  const by={};list.filter(e=>e.t==='d').forEach(e=>by[e.c]=(by[e.c]||0)+e.m);
+  const ks=Object.keys(by).sort((a,b)=>by[b]-by[a]);
+  $('cats').innerHTML=ks.length?'<b>Dépenses par catégorie</b>'+ks.map(k=>'<div style="margin-top:6px"><div><span>'+esc(k)+'</span><span>'+money(by[k])+'</span></div><div class="bar"><i style="width:'+Math.round(by[k]/d*100)+'%"></i></div></div>').join(''):'';
+  $('ls').innerHTML=list.map(e=>'<div class="it"><div><b style="font-weight:600">'+esc(e.l||e.c)+'</b><span>'+new Date(e.d+'T12:00:00').toLocaleDateString('fr-FR',{day:'numeric',month:'short',year:'numeric'})+' · '+esc(e.c)+'</span></div><div><b class="'+(e.t==='r'?'pos':'neg')+'">'+(e.t==='r'?'+':'−')+money(e.m)+'</b><button class="r" data-del="'+e.id+'">✕</button></div></div>').join('')||'<div class="note">Aucune opération sur cette période.</div>';
+}
+$('ad').onclick=()=>{
+  const m=Math.round(+$('mt').value),d=$('dt').value;
+  if(!m||m<=0||!d){$('msg').textContent='Entre un montant et une date.';return}
+  data.push({id:Date.now(),d,t:$('ty').value,m,l:$('lb').value.trim(),c:$('ct').value});
+  if(!sset('lc',data))$('msg').textContent='Impossible d’enregistrer : mémoire du navigateur pleine.';
+  else $('msg').textContent='Opération ajoutée.';
+  $('mt').value='';$('lb').value='';
+  $('mo').value=d.slice(0,7);$('all').checked=false;
+  render();
+};
+$('ls').onclick=e=>{
+  const id=e.target.dataset.del;if(!id)return;
+  if(!confirm('Supprimer cette opération ?'))return;
+  data=data.filter(x=>String(x.id)!==id);sset('lc',data);render();
+};
+$('mo').onchange=$('all').onchange=render;
+$('ex').onclick=()=>{
+  const q=v=>'"'+String(v).replace(/"/g,'""')+'"';
+  const rows=[['Date','Type','Catégorie','Libellé','Montant (GNF)']].concat(data.slice().sort((a,b)=>a.d.localeCompare(b.d)).map(e=>[e.d,e.t==='r'?'Recette':'Dépense',e.c,e.l,e.m]));
+  const csv='﻿'+rows.map(r=>r.map(q).join(';')).join('\n');
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+  a.download='livre-de-comptes.csv';document.body.appendChild(a);a.click();a.remove();
+};
+$('ct').innerHTML=CATS.map(c=>'<option>'+c+'</option>').join('');
+$('dt').value=today();$('mo').value=today().slice(0,7);
+render();
+if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol)){navigator.serviceWorker.register('sw.js').catch(()=>{})}
+</script>
+</body>
+</html>
