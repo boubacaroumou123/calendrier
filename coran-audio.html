@@ -41,7 +41,7 @@ a.back{display:inline-block;margin-bottom:8px;color:var(--ac);text-decoration:no
 
 <div class="card">
   <div class="row"><select id="qs" style="flex:1"></select><button class="g" id="qr">Reprendre</button></div>
-  <div class="row" style="margin-top:8px"><button id="pa">▶ Écouter la sourate</button><button class="g" id="ps">⏹ Arrêter</button></div>
+  <div class="row" style="margin-top:8px"><button id="pa">▶ Écouter la sourate</button><button class="g" id="ps">⏹ Arrêter</button><button class="g" id="dl">⬇ Hors ligne</button></div>
   <div class="note" id="qt">Choisis une sourate. Touche le texte arabe d’un verset pour le garder comme repère de lecture.</div>
   <div class="bar"><i id="pb"></i></div>
   <div class="note" id="pt"></div>
@@ -49,7 +49,7 @@ a.back{display:inline-block;margin-bottom:8px;color:var(--ac);text-decoration:no
 
 <div id="qa"></div>
 
-<div id="bar2"><button class="g" id="pp">⏮</button><span id="cur"></span><button class="g" id="pn">⏭</button></div>
+<div id="bar2"><button class="g" id="pp">⏮</button><button id="pz">⏸</button><span id="cur"></span><button class="g" id="pn">⏭</button></div>
 
 <div class="note" style="padding:0 6px">Texte arabe et traduction de Muhammad Hamidullah. Récitation : Mishary Alafasy (internet requis). Les sourates déjà ouvertes restent lisibles hors ligne.</div>
 
@@ -111,14 +111,85 @@ function playAt(i){
   idx=i;playing=true;
   au.src=AUDIO+cur.list[i][3]+'.mp3';
   au.play().catch(()=>{$('qt').textContent='Audio indisponible : vérifie ta connexion.';stop()});
+  setMS(i);preloadNext(i);
   $('bar2').classList.add('on');$('cur').textContent=SN[cur.s-1]+' · verset '+cur.list[i][0];
   mark();
   const el=document.querySelector('#qa [data-i="'+i+'"]');if(el)el.scrollIntoView({block:'center',behavior:'smooth'});
 }
-function stop(){playing=false;cont=false;try{au.pause()}catch(e){}idx=-1;$('bar2').classList.remove('on');mark()}
+function stop(){playing=false;cont=false;try{au.pause()}catch(e){}idx=-1;$('bar2').classList.remove('on');mark();
+  if('mediaSession' in navigator){navigator.mediaSession.playbackState='none'}releaseWake()}
 au.onended=()=>{if(cont&&idx<cur.list.length-1)playAt(idx+1);else stop()};
+
+/* ===== Écoute en arrière-plan ===== */
+const pre=new Audio();pre.preload='auto';
+function preloadNext(i){const n=cur.list[i+1];if(n){pre.src=AUDIO+n[3]+'.mp3';try{pre.load()}catch(e){}}}
+const hasMS='mediaSession' in navigator;
+function setMS(i){
+  if(!hasMS)return;
+  try{
+    navigator.mediaSession.metadata=new MediaMetadata({
+      title:SN[cur.s-1]+' · verset '+cur.list[i][0],
+      artist:'Mishary Alafasy',
+      album:'Coran'
+    });
+  }catch(e){}
+}
+function setState(st){if(hasMS)navigator.mediaSession.playbackState=st}
+function togglePause(){
+  if(idx<0)return;
+  if(au.paused){au.play().catch(()=>{})}else{au.pause()}
+}
+au.onplay=()=>{$('pz').textContent='⏸';setState('playing');getWake()};
+au.onpause=()=>{if(au.ended||idx<0)return;$('pz').textContent='▶';setState('paused');releaseWake()};
+let errN=0;
+au.onerror=()=>{
+  if(idx<0)return;
+  if(errN<2){errN++;const t=au.currentTime;au.load();au.play().catch(()=>{});return}
+  errN=0;
+  if(cont&&idx<cur.list.length-1)playAt(idx+1);else{$('qt').textContent='Audio indisponible : vérifie ta connexion.';stop()}
+};
+au.onplaying=()=>{errN=0};
+if(hasMS){
+  const ms=navigator.mediaSession,set=(a,f)=>{try{ms.setActionHandler(a,f)}catch(e){}};
+  set('play',()=>{if(idx>=0)au.play().catch(()=>{})});
+  set('pause',()=>{if(idx>=0)au.pause()});
+  set('previoustrack',()=>{if(idx>0)playAt(idx-1)});
+  set('nexttrack',()=>{if(idx<cur.list.length-1)playAt(idx+1);else stop()});
+  set('stop',stop);
+  set('seekbackward',()=>{au.currentTime=Math.max(0,au.currentTime-10)});
+  set('seekforward',()=>{au.currentTime=Math.min(au.duration||1e9,au.currentTime+10)});
+}
+/* Garde l'écran/processus actif pendant la lecture (si le navigateur le permet) */
+let wl=null;
+async function getWake(){try{if('wakeLock' in navigator&&!wl){wl=await navigator.wakeLock.request('screen');wl.addEventListener('release',()=>{wl=null})}}catch(e){wl=null}}
+function releaseWake(){try{if(wl){wl.release();wl=null}}catch(e){}}
+/* Si le navigateur a coupé le son en revenant sur la page, on reprend */
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible'&&idx>=0&&playing&&au.paused&&!au.ended&&cont){au.play().catch(()=>{})}
+});
 $('pa').onclick=()=>{if(!cur.list.length){$('qt').textContent='Choisis d’abord une sourate.';return}cont=true;playAt(idx>=0?idx:0)};
 $('ps').onclick=stop;
+let dling=false;
+$('dl').onclick=async()=>{
+  if(!cur.list.length){$('qt').textContent='Choisis d’abord une sourate.';return}
+  if(!('caches' in window)){$('qt').textContent='Téléchargement impossible : ouvre la page en https.';return}
+  if(dling)return;dling=true;
+  const s=cur.s,list=cur.list.slice(),nm=SN[s-1];let ok=0,bad=0;
+  try{
+    const c=await caches.open('coran-audio-v1');
+    for(let i=0;i<list.length;i++){
+      const u=AUDIO+list[i][3]+'.mp3';
+      try{
+        if(!(await c.match(u))){const r=await fetch(u,{mode:'cors'});if(!r.ok)throw 0;await c.put(u,r)}
+        ok++;
+      }catch(e){bad++}
+      $('qt').textContent='Téléchargement '+nm+' : '+(ok+bad)+' / '+list.length;
+    }
+    $('qt').textContent=bad?('Terminé : '+ok+' versets enregistrés, '+bad+' échecs (réessaie avec une meilleure connexion).'):('✅ '+nm+' est disponible hors ligne ('+ok+' versets).');
+  }catch(e){$('qt').textContent='Téléchargement impossible.'}
+  dling=false;
+};
+$('pz').onclick=togglePause;
 $('pp').onclick=()=>{if(idx>0)playAt(idx-1)};
 $('pn').onclick=()=>{if(idx<cur.list.length-1)playAt(idx+1);else stop()};
 $('qa').onclick=e=>{
